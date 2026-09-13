@@ -24,6 +24,9 @@ SECTIONS
         __stack_top = .;
     }
 
+    __kernel_start = 0x100000;
+    __kernel_end = .;
+
     /DISCARD/ : {
         *(.eh_frame*)
         *(.note*)

@@ -47,11 +47,34 @@ void terminal_print_hex(uint64_t n);
 /* Memory */
 void* kmalloc(size_t size);
 void kfree(void* ptr);
+int mem_selftest(void);
 void* memset(void* s, int c, size_t n);
 void* memcpy(void* dest, const void* src, size_t n);
 int strlen(const char* s);
 void* memmove(void* dest, const void* src, size_t n);
 int strcmp(const char* a, const char* b);
+
+/* Physical memory manager */
+struct pmm_region {
+    uint64_t base;
+    uint64_t len;
+    int type;
+};
+void pmm_init(uint64_t multiboot_addr);
+void* pmm_alloc_pages(size_t count);
+void pmm_free_pages(void* addr, size_t count);
+uint64_t pmm_total_mem(void);
+uint64_t pmm_free_mem(void);
+uint32_t pmm_region_count_get(void);
+struct pmm_region pmm_region_get(uint32_t i);
+
+/* Virtual memory manager */
+void vmm_init(void);
+void vmm_map_page(uint64_t vaddr, uint64_t paddr, uint8_t flags);
+void vmm_unmap_page(uint64_t vaddr);
+
+extern unsigned char __kernel_start[];
+extern unsigned char __kernel_end[];
 
 /* GDT */
 void gdt_init(void);

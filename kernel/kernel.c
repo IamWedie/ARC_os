@@ -9,11 +9,21 @@ extern void fs_init(void);
 
 void kernel_main(uint64_t multiboot_addr) {
     terminal_initialize();
-    
+
     terminal_putstring("=== ARC OS v1.0 ===\n");
     terminal_putstring("Full OS from scratch\n");
     terminal_putstring("Booting...\n");
-    
+
+    /* Physical + virtual memory first: everything depends on real RAM. */
+    pmm_init(multiboot_addr);
+    vmm_init();
+
+    terminal_putstring("Physical memory: ");
+    terminal_print_int(pmm_total_mem() >> 20);
+    terminal_putstring(" MiB total, ");
+    terminal_print_int(pmm_free_mem() >> 20);
+    terminal_putstring(" MiB available\n");
+
     /* Initialize all subsystems */
     gdt_init();
     idt_init();
@@ -29,6 +39,12 @@ void kernel_main(uint64_t multiboot_addr) {
     terminal_putstring("Keyboard driver initialized\n");
     terminal_putstring("Process scheduler initialized\n");
     terminal_putstring("Filesystem initialized\n");
+
+    if (mem_selftest() == 0)
+        terminal_putstring("Heap self-test OK\n");
+    else
+        terminal_putstring("Heap self-test FAILED\n");
+
     terminal_putstring("\n--- ARC OS Shell ---\n");
     
     /* Start userspace shell */
