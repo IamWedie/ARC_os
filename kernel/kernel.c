@@ -22,7 +22,7 @@ void kernel_main(uint64_t multiboot_addr) {
     fs_init();
     
     /* Print system info */
-    terminal_putstring("Kernel loaded at 0x");
+    terminal_putstring("Kernel loaded at ");
     terminal_print_hex(0x100000);
     terminal_putstring("\n");
     terminal_putstring("VGA console initialized\n");

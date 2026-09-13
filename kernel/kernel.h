@@ -64,6 +64,9 @@ void idt_set_gate(uint8_t num, uint64_t base, uint16_t sel, uint8_t flags);
 void interrupts_init(void);
 void outb(uint16_t port, uint8_t val);
 uint8_t inb(uint16_t port);
+void irq0_stub(void);
+void irq1_stub(void);
+int kbd_getchar(void);
 
 /* Scheduler */
 #define MAX_PROCESSES 16

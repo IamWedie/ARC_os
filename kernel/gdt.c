@@ -20,7 +20,10 @@ struct gdt_ptr gdt_ptr_data;
 
 void gdt_init(void) {
     gdt[0] = (struct gdt_entry){0,0,0,0,0,0};
-    gdt[1] = (struct gdt_entry){0xFFFF,0,0,0x9A,0xCF,0};
+    /* 64-bit code segment: L=1 in the granularity byte (0x20). The
+       previous 0xCF (D=1, L=0) described a 32-bit code segment, which
+       made interrupt-gate CS reloads fault with #GP and a triple fault. */
+    gdt[1] = (struct gdt_entry){0xFFFF,0,0,0x9A,0x20,0};
     gdt[2] = (struct gdt_entry){0xFFFF,0,0,0x92,0xCF,0};
     gdt_ptr_data.limit = sizeof(gdt) - 1;
     gdt_ptr_data.base = (uint64_t)&gdt;

@@ -19,7 +19,7 @@ extern int syscall_read(int fd, char* buf, size_t count);
 extern void syscall_exit(int code);
 
 static void print_prompt(void) {
-    syscall_write(1, "tinyos> ", 8);
+    syscall_write(1, "arc> ", 5);
 }
 
 static void print_str(const char* s) {
@@ -49,7 +49,7 @@ static void run_command(const char* cmd) {
         return;
     }
     if (cmd[0] == 'l' && cmd[1] == 's') {
-        print_str("tinyOS filesystem (v0.1)\n");
+        print_str("ARC OS filesystem (v0.1)\n");
         print_str("  /kernel\n");
         print_str("  /shell\n");
         print_str("  /lib\n");
