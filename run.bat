@@ -1,5 +1,5 @@
 @echo off
-echo === TinyOS Run ===
+echo === ARC OS Run ===
 echo Starting QEMU...
 
 REM Check if QEMU is available

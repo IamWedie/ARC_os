@@ -10,7 +10,7 @@ extern void fs_init(void);
 void kernel_main(uint64_t multiboot_addr) {
     terminal_initialize();
     
-    terminal_putstring("=== TinyOS v1.0 ===\n");
+    terminal_putstring("=== ARC OS v1.0 ===\n");
     terminal_putstring("Full OS from scratch\n");
     terminal_putstring("Booting...\n");
     
@@ -29,7 +29,7 @@ void kernel_main(uint64_t multiboot_addr) {
     terminal_putstring("Keyboard driver initialized\n");
     terminal_putstring("Process scheduler initialized\n");
     terminal_putstring("Filesystem initialized\n");
-    terminal_putstring("\n--- TinyOS Shell ---\n");
+    terminal_putstring("\n--- ARC OS Shell ---\n");
     
     /* Start userspace shell */
     shell_main();

@@ -1,5 +1,5 @@
 /*
- * TinyOS Standalone BIOS Bootloader
+ * ARC OS Standalone BIOS Bootloader
  * 16-bit real mode -> 64-bit long mode
  * Loads kernel from disk and jumps to it
  */

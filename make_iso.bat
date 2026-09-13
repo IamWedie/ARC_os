@@ -1,10 +1,10 @@
 @echo off
-echo === TinyOS ISO Creator ===
+echo === ARC OS ISO Creator ===
 
 mkdir iso\boot\grub 2>nul
 copy os.elf iso\boot\ >nul 2>&1
 
-echo menuentry "TinyOS" {
+echo menuentry "ARC OS" {
     multiboot /boot/os.elf
     boot
 } > iso\boot\grub\grub.cfg

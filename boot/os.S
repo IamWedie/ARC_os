@@ -1,5 +1,5 @@
 /*
- * TinyOS - Multiboot1 entry point (for GRUB)
+ * ARC OS - Multiboot1 entry point (for GRUB)
  * Calls kernel_main after switching to 64-bit mode
  */
 .set MB_MAGIC, 0x1BADB002

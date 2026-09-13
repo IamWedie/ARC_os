@@ -1,5 +1,5 @@
 /*
- * TinyOS Userspace Shell
+ * ARC OS Userspace Shell
  * Simple command-line interpreter
  */
 #include <stddef.h>
@@ -36,7 +36,7 @@ static void print_newline(void) {
 static void run_command(const char* cmd) {
     /* Check for built-in commands */
     if (cmd[0] == 'h' && cmd[1] == 'e' && cmd[2] == 'l' && cmd[3] == 'p') {
-        print_str("TinyOS Commands:\n");
+        print_str("ARC OS Commands:\n");
         print_str("  help    - Show this message\n");
         print_str("  clear   - Clear screen\n");
         print_str("  ls      - List files\n");
@@ -102,7 +102,7 @@ static void read_line(char* buf, int max_len) {
 }
 
 void shell_main(void) {
-    print_str("=== TinyOS Shell v1.0 ===\n");
+    print_str("=== ARC OS Shell v1.0 ===\n");
     print_str("Type 'help' for available commands.\n\n");
     
     while (1) {

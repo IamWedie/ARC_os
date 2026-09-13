@@ -3,7 +3,7 @@ set CC=C:\msys64\ucrt64\bin\gcc.exe
 set OBJCOPY=C:\msys64\ucrt64\bin\objcopy.exe
 set BASE=C:\Users\wadia\os_project
 
-echo === TinyOS v1.0 - Full Build System ===
+echo === ARC OS v1.0 - Full Build System ===
 echo.
 
 REM ============================================

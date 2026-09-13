@@ -11,7 +11,7 @@ shutil.copy2(f'{base}/os.elf', f'{base}/iso/boot/os.elf')
 shutil.copy2(f'{base}/os.bin', f'{base}/iso/boot/os.bin')
 
 # Create grub.cfg
-grub_cfg = """menuentry "TinyOS" {
+grub_cfg = """menuentry "ARC OS" {
     multiboot /boot/os.elf
     boot
 }

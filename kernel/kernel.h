@@ -1,5 +1,5 @@
 /*
- * TinyOS Kernel Header
+ * ARC OS Kernel Header
  * Updated with keyboard and process management
  */
 #ifndef KERNEL_H

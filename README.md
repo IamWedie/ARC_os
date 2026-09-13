@@ -1,7 +1,7 @@
 # ARC_OS - Operating System Built from Scratch
 
 <p align="center">
-  <img src="https://img.shields.io/badge/OS-TinyOS%20v1.0-blue" alt="TinyOS v1.0">
+  <img src="https://img.shields.io/badge/OS-ARC OS%20v1.0-blue" alt="ARC OS v1.0">
   <img src="https://img.shields.io/badge/Arch-x86_64-blue" alt="x86_64">
   <img src="https://img.shields.io/badge/Boot-Multiboot%20%26%20BIOS-green" alt="Multiboot + BIOS">
 </p>
@@ -31,7 +31,7 @@ A complete x86_64 operating system built entirely from scratch — no Linux, no 
 
 ## About
 
-ARC_OS (also known as TinyOS) is a hobby operating system written entirely in **x86_64 Assembly** and **C** from scratch. It demonstrates the fundamental concepts of operating system development including:
+ARC OS (ARC_OS) is a hobby operating system written entirely in **x86_64 Assembly** and **C** from scratch. It demonstrates the fundamental concepts of operating system development including:
 
 - **Bootloader development** — Multiboot1 compliant, switches from 16-bit real mode to 32-bit protected mode to 64-bit long mode
 - **Memory management** — Physical page tables with identity mapping
