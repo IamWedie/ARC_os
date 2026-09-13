@@ -89,24 +89,34 @@ void outb(uint16_t port, uint8_t val);
 uint8_t inb(uint16_t port);
 void irq0_stub(void);
 void irq1_stub(void);
+uint64_t irq0_handler(uint64_t rsp);
 int kbd_getchar(void);
+
+/* PIT timer */
+void pit_init(void);
+void pit_init_freq(uint32_t hz);
 
 /* Scheduler */
 #define MAX_PROCESSES 16
 #define USER_STACK_TOP 0x90000000
 
 typedef struct {
-    uint64_t rsp;
-    uint64_t rip;
+    uint64_t rsp;            /* saved kernel stack pointer (trap frame) */
+    uint64_t rip;            /* entry point */
     int pid;
     int running;
-    uint64_t stack_top;
+    int started;
+    uint64_t stack_base;
+    uint64_t stack_size;
     char name[32];
 } process_t;
 
 void scheduler_init(void);
 void scheduler_yield(void);
+uint64_t scheduler_switch(uint64_t rsp);
 void process_create(void (*entry)(void), const char* name);
+void preempt_disable(void);
+void preempt_enable(void);
 
 /* Filesystem */
 #define FS_SECTOR_SIZE 512

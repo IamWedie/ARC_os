@@ -87,6 +87,7 @@ void* kmalloc(size_t size) {
     if (size == 0) size = 1;
     size = block_align(size);
 
+    preempt_disable();
     block_hdr_t* b = heap_root;
     while (b) {
         if (b->free && b->size >= size) {
@@ -103,6 +104,7 @@ void* kmalloc(size_t size) {
             }
             b->free = 0;
             memset(b + 1, 0, b->size);
+            preempt_enable();
             return (void*)(b + 1);
         }
         b = b->next;
@@ -126,13 +128,18 @@ void* kmalloc(size_t size) {
     }
     b->free = 0;
     memset(b + 1, 0, b->size);
+    preempt_enable();
     return (void*)(b + 1);
 }
 
 void kfree(void* ptr) {
     if (!ptr) return;
+    preempt_disable();
     block_hdr_t* b = (block_hdr_t*)ptr - 1;
-    if (b->free) return;
+    if (b->free) {
+        preempt_enable();
+        return;
+    }
     b->free = 1;
 
     /* coalesce with previous */
@@ -148,6 +155,7 @@ void kfree(void* ptr) {
         b->next = b->next->next;
         if (b->next) b->next->prev = b;
     }
+    preempt_enable();
 }
 
 int mem_selftest(void) {

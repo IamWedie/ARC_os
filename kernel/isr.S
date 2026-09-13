@@ -4,6 +4,10 @@
  * caller-saved registers, dispatch to the C handler, restore and return with
  * iretq so the CPU state is correctly restored.
  * AT&T syntax (GNU assembler via zig cc).
+ *
+ * irq0_stub is also the preemption point: it passes its own stack pointer to
+ * irq0_handler and, if the scheduler picks another process, loads that
+ * process's saved stack pointer before POPREGS/iretq.
  */
 
 .section .text
@@ -36,7 +40,12 @@
 .type irq0_stub, @function
 irq0_stub:
     PUSHREGS
+    movq %rsp, %rdi
     call irq0_handler
+    testq %rax, %rax
+    jz 1f
+    movq %rax, %rsp
+1:
     POPREGS
     iretq
 

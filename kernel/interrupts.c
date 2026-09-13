@@ -11,10 +11,10 @@ uint8_t inb(uint16_t port) {
     return v;
 }
 
-/* Timer interrupt handler (IRQ0, vector 32) */
-void irq0_handler(void) {
+/* Timer interrupt handler (IRQ0, vector 32): preemption point. */
+uint64_t irq0_handler(uint64_t rsp) {
     outb(0x20, 0x20);
-    scheduler_yield();
+    return scheduler_switch(rsp);
 }
 
 /* Keyboard scancode to ASCII map */
@@ -75,6 +75,6 @@ void interrupts_init(void) {
 
     __asm__ volatile("sti");
 
-    outb(0x21, 0x01);
+    outb(0x21, 0x00);
     outb(0xA1, 0x00);
 }

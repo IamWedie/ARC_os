@@ -4,7 +4,6 @@ extern void gdt_init(void);
 extern void idt_init(void);
 extern void interrupts_init(void);
 extern void scheduler_init(void);
-extern void scheduler_yield(void);
 extern void fs_init(void);
 
 void kernel_main(uint64_t multiboot_addr) {
@@ -29,6 +28,7 @@ void kernel_main(uint64_t multiboot_addr) {
     idt_init();
     interrupts_init();
     scheduler_init();
+    pit_init();
     fs_init();
     
     /* Print system info */
@@ -37,7 +37,7 @@ void kernel_main(uint64_t multiboot_addr) {
     terminal_putstring("\n");
     terminal_putstring("VGA console initialized\n");
     terminal_putstring("Keyboard driver initialized\n");
-    terminal_putstring("Process scheduler initialized\n");
+    terminal_putstring("Process scheduler initialized (100 Hz)\n");
     terminal_putstring("Filesystem initialized\n");
 
     if (mem_selftest() == 0)
@@ -46,12 +46,12 @@ void kernel_main(uint64_t multiboot_addr) {
         terminal_putstring("Heap self-test FAILED\n");
 
     terminal_putstring("\n--- ARC OS Shell ---\n");
-    
-    /* Start userspace shell */
-    shell_main();
-    
-    /* Should not reach here */
-    while(1) {
+
+    /* Start the userspace shell as its own preemptible process. */
+    process_create(shell_main, "shell");
+
+    /* Process 0 (kernel) becomes the idle loop. */
+    while (1) {
         __asm__ volatile("hlt");
     }
 }
