@@ -15,7 +15,7 @@
 #include "kernel.h"
 
 #define PROCESS_STACK_PAGES 4
-#define PUSHREG_COUNT 9          /* must match isr.S PUSHREGS */
+#define PUSHREG_COUNT 15         /* must match isr.S PUSHREGS (all GPRs) */
 #define IRETQ_FRAME_BYTES 40     /* rip cs rflags rsp ss */
 
 process_t processes[MAX_PROCESSES];
@@ -40,10 +40,16 @@ void scheduler_init(void) {
         processes[i].name[0] = '\0';
     }
 
-    /* The boot path becomes process 0; it lives on the entry64 stack. */
+    /*
+     * The boot path becomes process 0; it lives on the entry64 stack.
+     * Its kernel-stack top is used for TSS RSP0 whenever it cannot be
+     * switched out of Ring 3.
+     */
     uint64_t rsp;
     __asm__ volatile("movq %%rsp, %0" : "=r"(rsp));
     processes[0].rsp = rsp;
+    processes[0].kstack_sp = (uint64_t)__stack_top;
+    processes[0].user_mode = 0;
     processes[0].running = 1;
     processes[0].started = 1;
     processes[0].rip = 0;
@@ -54,20 +60,22 @@ void scheduler_init(void) {
     num_processes = 1;
 }
 
-void process_create(void (*entry)(void), const char* name) {
-    if (num_processes >= MAX_PROCESSES) return;
+static int process_build_common(uint64_t entry, const char* name,
+                                int user_mode, uint64_t kstack_top,
+                                uint64_t user_rsp) {
+    if (num_processes >= MAX_PROCESSES) return -1;
 
     void* stack = pmm_alloc_pages(PROCESS_STACK_PAGES);
-    if (!stack) return;
+    if (!stack) return -1;
     uint64_t top = (uint64_t)stack + PROCESS_STACK_PAGES * 4096;
 
-    /* iretq frame at the top of the new stack. */
+    /* iretq frame at the top of the new (kernel) stack. */
     uint64_t* fr = (uint64_t*)top;
-    fr[-5] = (uint64_t)entry;
-    fr[-4] = 0x08;              /* CS: ring 0 code */
-    fr[-3] = 0x202;             /* RFLAGS: IF set */
-    fr[-2] = top - 8;           /* initial RSP (16-aligned stack, ABI entry) */
-    fr[-1] = 0x10;              /* SS: data segment */
+    fr[-5] = entry;
+    fr[-4] = user_mode ? (GDTSEL_UC | 3) : 0x08;   /* CS (+ RPL 3 for user) */
+    fr[-3] = 0x202;                          /* RFLAGS: IF set */
+    fr[-2] = user_mode ? user_rsp : (top - 8);
+    fr[-1] = user_mode ? (GDTSEL_UD | 3) : 0x10;   /* SS (+ RPL 3 for user) */
 
     /* zeroed POPREGS block right below the frame. */
     uint64_t* gpr = (uint64_t*)(top - (PUSHREG_COUNT * 8) - IRETQ_FRAME_BYTES);
@@ -75,7 +83,9 @@ void process_create(void (*entry)(void), const char* name) {
 
     process_t* p = &processes[num_processes];
     p->rsp = (uint64_t)gpr;
-    p->rip = (uint64_t)entry;
+    p->rip = entry;
+    p->kstack_sp = kstack_top;
+    p->user_mode = user_mode;
     p->running = 1;
     p->started = 0;
     p->stack_base = (uint64_t)stack;
@@ -87,6 +97,15 @@ void process_create(void (*entry)(void), const char* name) {
     }
     p->name[j] = '\0';
     num_processes++;
+    return p->pid;
+}
+
+void process_create(void (*entry)(void), const char* name) {
+    process_build_common((uint64_t)entry, name, 0, 0, 0);
+}
+
+int process_create_user(uint64_t entry, uint64_t kstack_top, const char* name) {
+    return process_build_common(entry, name, 1, kstack_top, USER_STACK_TOP);
 }
 
 uint64_t scheduler_switch(uint64_t rsp) {
@@ -103,7 +122,12 @@ uint64_t scheduler_switch(uint64_t rsp) {
     }
 
     current_process = next;
-    if (next == prev) return 0;
+    if (next == prev) {
+        /* Stay on the same process: keep the kernel stack selection valid. */
+        return 0;
+    }
+    /* Privileged entry from Ring 3 uses the new process's kernel stack. */
+    set_tss_rsp0(processes[next].kstack_sp);
     processes[next].started = 1;
     return processes[next].rsp;
 }

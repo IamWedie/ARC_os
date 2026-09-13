@@ -13,6 +13,11 @@ SECTIONS
         *(.data)
     }
 
+    .userblob : ALIGN(16) {
+        *(.userblob)
+        __userblob_end = .;
+    }
+
     .bss ALIGN(4K) : {
         __bss_start = .;
         *(COMMON)

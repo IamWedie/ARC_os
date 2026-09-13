@@ -1,8 +1,11 @@
 /*
  * ARC OS Long-mode interrupt stubs.
  * IRQ entry via the IDT pushes (SS, RSP, RFLAGS, CS, RIP); these stubs save
- * caller-saved registers, dispatch to the C handler, restore and return with
- * iretq so the CPU state is correctly restored.
+ * ALL caller- and callee-saved GPRs, dispatch to the C handler, restore and
+ * return with iretq so the CPU state is correctly restored. The callee-saved
+ * regs (rbx, rbp, r12-r15) must be saved too: the interrupted thread may be
+ * preempted (timer) or trapped into the kernel and must resume with its own
+ * values, not whatever the kernel C code left behind.
  * AT&T syntax (GNU assembler via zig cc).
  *
  * irq0_stub is also the preemption point: it passes its own stack pointer to
@@ -22,9 +25,21 @@
     pushq %r9
     pushq %r10
     pushq %r11
+    pushq %rbx
+    pushq %rbp
+    pushq %r12
+    pushq %r13
+    pushq %r14
+    pushq %r15
 .endm
 
 .macro POPREGS
+    popq %r15
+    popq %r14
+    popq %r13
+    popq %r12
+    popq %rbp
+    popq %rbx
     popq %r11
     popq %r10
     popq %r9
@@ -55,4 +70,23 @@ irq1_stub:
     PUSHREGS
     call irq1_handler
     POPREGS
+    iretq
+
+/*
+ * int 0x80 syscall gate (DPL 3). A privilege transition happens on entry so
+ * the kernel stack is auto-selected via TSS RSP0; the user's SysV args are
+ * still in rdi/rsi/rdx/rcx when we arrive. We forward them to the C
+ * dispatcher, park the return value in a placeholder slot pushed above the
+ * saved registers, restore the user's registers and only then load the
+ * return value into rax so iretq delivers it to the caller.
+ */
+.globl syscall_stub
+.type syscall_stub, @function
+syscall_stub:
+    pushq $0                /* return-value slot (popped into rax below) */
+    PUSHREGS
+    call syscall_dispatch
+    movq %rax, 15*8(%rsp)   /* park result above the saved regs */
+    POPREGS
+    popq %rax
     iretq

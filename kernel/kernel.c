@@ -47,8 +47,9 @@ void kernel_main(uint64_t multiboot_addr) {
 
     terminal_putstring("\n--- ARC OS Shell ---\n");
 
-    /* Start the userspace shell as its own preemptible process. */
-    process_create(shell_main, "shell");
+    /* Start the userspace shell (ring 3) as its own preemptible process. */
+    if (user_process_create_from_blob() < 0)
+        terminal_putstring("FAILED: user shell could not be loaded\n");
 
     /* Process 0 (kernel) becomes the idle loop. */
     while (1) {

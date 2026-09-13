@@ -70,6 +70,9 @@ void interrupts_init(void) {
     idt_set_gate(32, (uint64_t)irq0_stub, 0x08, 0x8E);
     idt_set_gate(33, (uint64_t)irq1_stub, 0x08, 0x8E);
 
+    /* int 0x80 syscall gate: present, ring-3, 64-bit interrupt gate (0xEE) */
+    idt_set_gate(0x80, (uint64_t)syscall_stub, 0x08, 0xEE);
+
     outb(0x20, 0x20);
     outb(0xA0, 0x20);
 
