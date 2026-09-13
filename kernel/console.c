@@ -29,6 +29,7 @@ void terminal_clear(void) {
 }
 
 void terminal_putchar(char c, uint8_t color) {
+    serial_putchar(c);
     if (c == '\n') {
         terminal_row++;
         terminal_col = 0;

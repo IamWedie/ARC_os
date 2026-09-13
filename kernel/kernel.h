@@ -161,6 +161,11 @@ int fs_seek(int fd, uint32_t pos);
 int fs_delete(const char* name);
 int fs_list(void);
 
+/* Serial (COM1) */
+void serial_putchar(char c);
+void serial_write(const char* s, uint32_t len);
+int serial_init(void);
+
 /* Userspace */
 long syscall_dispatch(uint64_t n, uint64_t a1, uint64_t a2, uint64_t a3);
 void syscall_stub(void);

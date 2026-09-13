@@ -8,6 +8,7 @@ extern void fs_init(void);
 
 void kernel_main(uint64_t multiboot_addr) {
     terminal_initialize();
+    serial_init();
 
     terminal_putstring("=== ARC OS v1.0 ===\n");
     terminal_putstring("Full OS from scratch\n");
