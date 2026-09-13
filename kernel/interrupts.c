@@ -17,7 +17,7 @@ uint64_t irq0_handler(uint64_t rsp) {
     return scheduler_switch(rsp);
 }
 
-/* Keyboard scancode to ASCII map */
+/* Keyboard scancode to ASCII maps (US layout, lower and shifted) */
 static const char scancode_map[128] = {
     0, 27, '1','2','3','4','5','6','7','8','9','0','-','=','\b',
     '\t','q','w','e','r','t','y','u','i','o','p','[',']','\n',
@@ -27,16 +27,44 @@ static const char scancode_map[128] = {
     0,0,0,0,0,0,0,0,0,0,0,0
 };
 
+static const char scancode_shift_map[128] = {
+    0, 27, '!','@','#','$','%','^','&','*','(',')','_','+','\b',
+    '\t','Q','W','E','R','T','Y','U','I','O','P','{','}','\n',
+    0,'A','S','D','F','G','H','J','K','L',':','"','~',0,'|',
+    'Z','X','C','V','B','N','M','<','>','?',0,'*',0,' ',0,0,0,
+    0,0,0,0,0,0,0,'7','8','9','-','4','5','6','+','1','2','3','0','.',0,0,0,
+    0,0,0,0,0,0,0,0,0,0,0,0
+};
+
+#define SC_SHIFT_L       0x2A
+#define SC_SHIFT_R       0x36
+#define SC_SHIFT_L_REL   0xAA
+#define SC_SHIFT_R_REL   0xB6
+
 /* Keyboard ring buffer (single producer = IRQ1, single consumer) */
 #define KBD_BUFSIZE 256
 static volatile uint8_t kbd_buffer[KBD_BUFSIZE];
 static volatile int kbd_head = 0;
 static volatile int kbd_tail = 0;
+static volatile int shift_down = 0;
 
 void irq1_handler(void) {
     uint8_t scancode = inb(0x60);
+
+    if (scancode == SC_SHIFT_L || scancode == SC_SHIFT_R) {
+        shift_down = 1;
+        outb(0x20, 0x20);
+        return;
+    }
+    if (scancode == SC_SHIFT_L_REL || scancode == SC_SHIFT_R_REL) {
+        shift_down = 0;
+        outb(0x20, 0x20);
+        return;
+    }
+
     if ((scancode & 0x80) == 0 && scancode < 128) {
-        char c = scancode_map[scancode];
+        char c = shift_down ? scancode_shift_map[scancode]
+                            : scancode_map[scancode];
         if (c != 0) {
             int next = (kbd_head + 1) & (KBD_BUFSIZE - 1);
             if (next != kbd_tail) {

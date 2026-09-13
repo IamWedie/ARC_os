@@ -140,24 +140,25 @@ void preempt_enable(void);
 #define FS_MAX_FILES 32
 #define FS_MAX_FILENAME 32
 #define FS_MAX_FILESIZE 65536
+#define FS_SLOT_FIRST 3   /* fd>=3 are files; 0/1/2 are stdin/stdout/stderr */
+#define FS_CONSOLE_STDOUT 1   /* fd>=3 are files */
 
 typedef struct {
     char name[FS_MAX_FILENAME];
     uint32_t size;
-    uint32_t start_sector;
-    int used;
+    uint32_t start_block;   /* first 512-byte block of the extent */
+    uint32_t blocks;        /* number of blocks in the extent */
+    uint32_t pos;           /* current read/write position */
+    int used;               /* file exists */
 } fs_file_t;
 
-typedef struct {
-    fs_file_t files[FS_MAX_FILES];
-    int num_files;
-    int initialized;
-} fs_t;
-
 void fs_init(void);
-int fs_open(const char* name);
+int fs_open(const char* name, int create);
 int fs_read(int fd, void* buf, size_t count);
+int fs_write(int fd, const void* buf, size_t count);
 int fs_close(int fd);
+int fs_seek(int fd, uint32_t pos);
+int fs_delete(const char* name);
 int fs_list(void);
 
 /* Userspace */
@@ -178,6 +179,11 @@ extern unsigned char _binary_user_shell_bin_size[];
 #define SYS_WRITE 1
 #define SYS_READ  2
 #define SYS_EXIT  3
+#define SYS_OPEN  4
+#define SYS_CLOSE 5
+#define SYS_LS    6
+#define SYS_DEL   7
+#define SYS_HELP  8
 
 /* Kernel entry */
 void kernel_main(uint64_t multiboot_addr);

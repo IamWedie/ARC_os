@@ -7,6 +7,36 @@
 #define SYS_WRITE 1
 #define SYS_READ  2
 #define SYS_EXIT  3
+#define SYS_OPEN  4
+#define SYS_CLOSE 5
+#define SYS_LS    6
+#define SYS_DEL   7
+
+#define STDIN  0
+#define STDOUT 1
+#define FS_FD0 3
+
+/* Substring check for command dispatch. */
+static int starts_with(const char* s, const char* prefix) {
+    const char* a = s;
+    const char* b = prefix;
+    while (*b) {
+        if (*a != *b) return 0;
+        a++; b++;
+    }
+    return 1;
+}
+
+/* Copy the next whitespace-delimited token from src into out; returns out. */
+static const char* next_token(const char* src, char* out, long outsz) {
+    while (*src == ' ') src++;
+    long i = 0;
+    while (*src && *src != ' ' && *src != '>' && i < outsz - 1) {
+        out[i++] = *src++;
+    }
+    out[i] = '\0';
+    return out;
+}
 
 /* int 0x80 ABI: rdi = number, rsi/rdx/rcx = a1..a3 (SysV arg slots), rax = return. */
 static long syscall4(long n, long a1, long a2, long a3) {
@@ -21,7 +51,7 @@ static long syscall4(long n, long a1, long a2, long a3) {
 static void print_str(const char* s) {
     long len = 0;
     while (s[len]) len++;
-    syscall4(SYS_WRITE, 1, (long)s, len);
+    syscall4(SYS_WRITE, STDOUT, (long)s, len);
 }
 
 static void print_newline(void) {
@@ -33,35 +63,139 @@ static void print_prompt(void) {
 }
 
 static void run_command(const char* cmd) {
-    if (cmd[0] == 'h' && cmd[1] == 'e' && cmd[2] == 'l' && cmd[3] == 'p') {
+    char tok[80];
+
+    if (starts_with(cmd, "help")) {
         print_str("ARC OS Commands:\n");
-        print_str("  help    - Show this message\n");
-        print_str("  clear   - Clear screen\n");
-        print_str("  ls      - List files\n");
-        print_str("  echo    - Print text\n");
-        print_str("  exit    - Exit shell\n");
+        print_str("  help                - Show this message\n");
+        print_str("  clear               - Clear screen\n");
+        print_str("  ls                  - List files\n");
+        print_str("  echo text           - Print text\n");
+        print_str("  echo text to file    - Write text to a file\n");
+        print_str("  cat <file>          - Print a file\n");
+        print_str("  rm <file>           - Delete a file\n");
+        print_str("  exit                - Exit shell\n");
         return;
     }
-    if (cmd[0] == 'c' && cmd[1] == 'l' && cmd[2] == 'e' && cmd[3] == 'a' && cmd[4] == 'r') {
+
+    if (starts_with(cmd, "clear")) {
         syscall4(SYS_EXIT, 0, 0, 0);
         return;
     }
-    if (cmd[0] == 'l' && cmd[1] == 's') {
-        print_str("ARC OS filesystem (v0.1)\n");
-        print_str("  /kernel\n");
-        print_str("  /shell\n");
-        print_str("  /lib\n");
+
+    if (starts_with(cmd, "ls")) {
+        syscall4(SYS_LS, 0, 0, 0);
         return;
     }
-    if (cmd[0] == 'e' && cmd[1] == 'c' && cmd[2] == 'h' && cmd[3] == 'o') {
-        print_str(cmd + 5);
-        print_newline();
+
+    if (starts_with(cmd, "echo")) {
+        /* echo can either print text or write it to a file.
+         * Redirect syntax:  echo text > <file>   (unix)
+         *              or:  echo text to <file>  (convenience, no '>') */
+        const char* fname = 0;
+        char* textend = 0;
+
+        const char* gt = cmd + 4;
+        while (*gt && *gt != '>') gt++;
+        if (*gt == '>') {
+            textend = (char*)gt;
+            fname = gt + 1;
+            while (*fname == ' ') fname++;
+        } else {
+            /* look for a lone " to " word separator */
+            const char* p = cmd + 4;
+            while (*p) {
+                if (p[0] == ' ' && p[1] == 't' && p[2] == 'o' &&
+                    (p[3] == '\0' || p[3] == ' ')) {
+                    textend = (char*)p;
+                    fname = p + 3;
+                    while (*fname == ' ') fname++;
+                    break;
+                }
+                p++;
+            }
+        }
+
+        if (fname != 0 && *fname != '\0') {
+            char text[128];
+            long ti = 0;
+            const char* s = cmd + 4;
+            while (*s == ' ') s++;
+            while (s < textend) {
+                if (ti >= (long)sizeof(text) - 1) break;
+                text[ti++] = *s++;
+            }
+            while (ti > 0 && (text[ti - 1] == ' ')) ti--;
+            text[ti] = '\0';
+
+            long fd = syscall4(SYS_OPEN, (long)fname, 1, 0);
+            if (fd < FS_FD0) {
+                print_str("echo: cannot create ");
+                print_str(fname);
+                print_newline();
+                return;
+            }
+            syscall4(SYS_WRITE, fd, (long)&text[0], ti);
+            syscall4(SYS_CLOSE, fd, 0, 0);
+            print_str(fname);
+            print_str(" written\n");
+        } else {
+            const char* s = cmd + 4;
+            while (*s == ' ') s++;
+            print_str(s);
+            print_newline();
+        }
         return;
     }
-    if (cmd[0] == 'e' && cmd[1] == 'x' && cmd[2] == 'i' && cmd[3] == 't') {
+
+    if (starts_with(cmd, "cat")) {
+        const char* fname = next_token(cmd + 3, tok, sizeof(tok));
+        if (tok[0] == '\0') {
+            print_str("usage: cat <file>\n");
+            return;
+        }
+        long fd = syscall4(SYS_OPEN, (long)fname, 0, 0);
+        if (fd < FS_FD0) {
+            print_str("cat: no such file: ");
+            print_str(fname);
+            print_newline();
+            return;
+        }
+        char chunk[128];
+        for (;;) {
+            long n = syscall4(SYS_READ, fd, (long)&chunk[0], (long)sizeof(chunk));
+            if (n <= 0) break;
+            long k = 0;
+            while (k < n) {
+                long w = syscall4(SYS_WRITE, STDOUT, (long)&chunk[k], n - k);
+                if (w <= 0) break;
+                k += w;
+            }
+        }
+        syscall4(SYS_CLOSE, fd, 0, 0);
+        return;
+    }
+
+    if (starts_with(cmd, "rm")) {
+        const char* fname = next_token(cmd + 2, tok, sizeof(tok));
+        if (tok[0] == '\0') {
+            print_str("usage: rm <file>\n");
+            return;
+        }
+        long r = syscall4(SYS_DEL, (long)fname, 0, 0);
+        if (r < 0) {
+            print_str("rm: no such file: ");
+            print_str(fname);
+            print_newline();
+        }
+        return;
+    }
+
+    if (starts_with(cmd, "exit")) {
         syscall4(SYS_EXIT, 0, 0, 0);
         return;
     }
+
     print_str("Unknown command: ");
     print_str(cmd);
     print_newline();
