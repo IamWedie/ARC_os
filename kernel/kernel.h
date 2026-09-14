@@ -175,12 +175,26 @@ void acpi_init(void);
 uint32_t acpi_lapic_base(void);
 uint32_t acpi_ioapic_base(void);
 int acpi_cpu_total(void);
+int acpi_iso_get(int irq, int* gsi, int* pol, int* trig);
 void lapic_init(void);
 void lapic_eoi(void);
+void lapic_mask_extint(void);
 void lapic_timer_start(void);
 uint64_t apic_timer_handler(uint64_t rsp);
 void apic_timer_stub(void);
 extern volatile int pit_tick_count;
+
+/* IOAPIC */
+void ioapic_init(void);
+int ioapic_active(void);
+
+/* ATA PIO */
+int ata_init(void);
+int ata_present(void);
+int ata_read_sectors(uint32_t lba, uint8_t count, void* buf);
+int ata_write_sectors(uint32_t lba, uint8_t count, const void* buf);
+void ata_irq_handler(void);
+void ata_irq_stub(void);
 
 /* Userspace */
 long syscall_dispatch(uint64_t n, uint64_t a1, uint64_t a2, uint64_t a3);

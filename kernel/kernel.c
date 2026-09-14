@@ -32,11 +32,14 @@ void kernel_main(uint64_t multiboot_addr) {
     interrupts_init();
     lapic_init();
     lapic_timer_start();
-    /* The PIT now drives the 100 Hz IRQ0 after calibration is done. */
+    /* Route device IRQs through the IOAPIC (masks the PIC + ExtINT). */
+    ioapic_init();
+    /* The PIT now drives IRQ0 as a background clock; the LAPIC is the tick. */
     pit_init();
-    /* Mask PIT IRQ0 in the PIC: the LAPIC timer is now the tick source. */
+    /* Mask PIT IRQ0 in the PIC (no-op once the IOAPIC disabled the PIC). */
     outb(0x21, 0x01);
     scheduler_init();
+    ata_init();
     fs_init();
     
     /* Print system info */

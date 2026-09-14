@@ -11,13 +11,15 @@ uint8_t inb(uint16_t port) {
     return v;
 }
 
-/* Timer interrupt handler (IRQ0, vector 32). During the LAPIC transition it
- * only acknowledges the PIT tick and feeds the calibration counter; the real
- * preemption tick is provided by the LAPIC timer (vector 0x40). */
+/* Timer interrupt handler (IRQ0, vector 32). With the LAPIC enabled vetor
+ * 0x40 is the preemption tick; this only acknowledges the PIT slot and
+ * feeds the calibration counter. EOI'ing both the PIC and the LAPIC keeps
+ * this working whether the IRQ arrived via ExtINT or the IOAPIC. */
 uint64_t irq0_handler(uint64_t rsp) {
     (void)rsp;
     pit_tick_count++;
     outb(0x20, 0x20);
+    lapic_eoi();
     return 0;
 }
 
@@ -78,6 +80,7 @@ void irq1_handler(void) {
         }
     }
     outb(0x20, 0x20);
+    lapic_eoi();
 }
 
 int kbd_getchar(void) {
@@ -102,6 +105,7 @@ void interrupts_init(void) {
     idt_set_gate(32, (uint64_t)irq0_stub, 0x08, 0x8E);
     idt_set_gate(33, (uint64_t)irq1_stub, 0x08, 0x8E);
     idt_set_gate(0x40, (uint64_t)apic_timer_stub, 0x08, 0x8E);
+    idt_set_gate(46, (uint64_t)ata_irq_stub, 0x08, 0x8E);  /* ATA IRQ14 */
 
     /* CPU exceptions (vectors 0..31) now fault into the panic handler. */
     exception_gate_init();

@@ -1,10 +1,16 @@
 /*
- * ARC OS - in-memory filesystem (RAM FS).
+ * ARC OS - filesystem.
  *
- * A file-data arena of contiguous frames is managed as 512-byte blocks with a
- * free-block bitmap. Each file owns a contiguous block extent plus metadata.
- * File descriptors are the descriptor-table indices + 3 so that 0/1/2 stay
- * stdin/stdout/stderr for the console.
+ * A file-data arena of 512-byte blocks managed with a free-block bitmap.
+ * Each file owns a contiguous block extent plus metadata.
+ *
+ * When an ATA disk is present the filesystem is made persistent: the
+ * superblock lives at sector 0, the file table at sectors 1..8 and file
+ * data at FS_DISK_DATA_LBA + block. Mutations are written through to the
+ * disk so files survive a reboot; without a disk it degrades to the old
+ * RAM-only behaviour.
+ * File descriptors are the descriptor-table indices + 3 so that 0/1/2
+ * stay stdin/stdout/stderr for the console.
  */
 #include "kernel.h"
 
@@ -13,9 +19,26 @@
 #define FS_NUM_BLOCKS (FS_ARENA_BYTES / FS_BLOCK_SIZE)   /* 1024 */
 #define FS_BITMAP_BYTES ((FS_NUM_BLOCKS + 7) / 8)
 
+/* On-disk layout (sector granularity). */
+#define FS_DISK_SB_LBA   0                        /* superblock             */
+#define FS_DISK_DIR_LBA  1                        /* fs_files[] table (raw) */
+#define FS_DIR_SECTORS   ((sizeof(fs_file_t) * FS_MAX_FILES + 511) / 512)
+#define FS_DISK_DATA_LBA (FS_DISK_DIR_LBA + FS_DIR_SECTORS)
+#define FS_DISK_VERSION  1
+
+typedef struct __attribute__((packed)) {
+    char magic[8];
+    uint32_t version;
+    uint32_t block_size;
+    uint32_t num_blocks;
+    uint32_t data_start_lba;
+} fs_sb_t;
+
 static fs_file_t* fs_files;
 static uint8_t* fs_bitmap;
 static uint8_t* fs_arena;
+static void* fs_dir_scratch;    /* >= FS_DIR_SECTORS*512 for on-disk I/O */
+static int fs_disk = 0;     /* nonzero when the FS is backed by the ATA disk */
 
 static void fs_selftest(void);
 
@@ -63,13 +86,26 @@ static int fs_name_copy(fs_file_t* f, const char* name) {
     return 0;
 }
 
-void fs_init(void) {
-    fs_files = kmalloc(sizeof(fs_file_t) * FS_MAX_FILES);
-    fs_bitmap = kmalloc(FS_BITMAP_BYTES);
-    memset(fs_bitmap, 0, FS_BITMAP_BYTES);
-    fs_arena = pmm_alloc_pages(FS_ARENA_BYTES / 4096);
-    if (!fs_files || !fs_bitmap || !fs_arena) return;
+static int fs_disk_fs_local_ok = 0;
 
+/* --- persistence plumbing (write-through to the ATA disk) --- */
+
+static int fs_persist_dir(void) {
+    if (!fs_disk || !fs_disk_fs_local_ok) return 0;
+    memcpy(fs_dir_scratch, fs_files, sizeof(fs_file_t) * FS_MAX_FILES);
+    return ata_write_sectors(FS_DISK_DIR_LBA, FS_DIR_SECTORS, fs_dir_scratch);
+}
+
+static int fs_persist_file(fs_file_t* f) {
+    if (!fs_disk || !fs_disk_fs_local_ok) return 0;
+    if (f->blocks == 0 || f->size == 0) return 0;
+    /* File extents are <= FS_MAX_FILESIZE/512 = 128 blocks: fits uint8_t. */
+    return ata_write_sectors(FS_DISK_DATA_LBA + f->start_block,
+                             (uint8_t)f->blocks,
+                             fs_arena + (uintptr_t)f->start_block * FS_BLOCK_SIZE);
+}
+
+static void fs_format(void) {
     for (int i = 0; i < FS_MAX_FILES; i++) {
         fs_files[i].used = 0;
         fs_files[i].name[0] = '\0';
@@ -78,18 +114,114 @@ void fs_init(void) {
         fs_files[i].blocks = 0;
         fs_files[i].pos = 0;
     }
+    if (fs_disk) {
+        /* Sector I/O always operates on full 512-byte units: never hand the
+         * (packed, 24-byte) superblock struct to ata_* directly or the
+         * transfer overruns its stack local. Stage it in a real sector. */
+        uint8_t sb[FS_SECTOR_SIZE];
+        memset(sb, 0, sizeof(sb));
+        fs_sb_t* sp = (fs_sb_t*)(void*)sb;
+        sp->magic[0] = 'A'; sp->magic[1] = 'R'; sp->magic[2] = 'C'; sp->magic[3] = 'F';
+        sp->magic[4] = 'S'; sp->magic[5] = '\0'; sp->magic[6] = '\0'; sp->magic[7] = '\0';
+        sp->version = FS_DISK_VERSION;
+        sp->block_size = FS_BLOCK_SIZE;
+        sp->num_blocks = FS_NUM_BLOCKS;
+        sp->data_start_lba = FS_DISK_DATA_LBA;
+        ata_write_sectors(FS_DISK_SB_LBA, 1, sb);
+        fs_persist_dir();
+    }
+}
 
-    /* Seed a welcome file so the filesystem is demonstrably working. */
-    const char* text =
-        "Welcome to ARC OS!\n"
-        "Commands: help, clear, ls, echo, cat <file>, rm <file>\n";
-    uint32_t len = 0;
-    while (text[len]) len++;
-    int fd = fs_open("welcome.txt", 1);
-    fs_write(fd, text, len);
+static __attribute__((always_inline)) inline void fs_check_ret(uint64_t saved) {
+    uint64_t now;
+    __asm__ volatile("movq 8(%%rbp), %0" : "=r"(now));
+    if (now != saved) {
+        terminal_putstring("*** fs_init ret CORRUPTED: was 0x");
+        terminal_print_hex(saved);
+        terminal_putstring(" now 0x");
+        terminal_print_hex(now);
+        terminal_putstring("\n");
+        for(;;) __asm__ volatile("cli; hlt");
+    }
+}
 
-    /* Self-test: create/write/read/delete a scratch file. */
+void fs_init(void) {
+    uint64_t fs_ret_saved;
+    __asm__ volatile("movq 8(%%rbp), %0" : "=r"(fs_ret_saved));
+    fs_files = kmalloc(sizeof(fs_file_t) * FS_MAX_FILES);
+    fs_bitmap = kmalloc(FS_BITMAP_BYTES);
+    memset(fs_bitmap, 0, FS_BITMAP_BYTES);
+    fs_arena = pmm_alloc_pages(FS_ARENA_BYTES / 4096);
+    fs_dir_scratch = pmm_alloc_pages(1);
+    if (!fs_files || !fs_bitmap || !fs_arena || !fs_dir_scratch) return;
+
+    fs_disk = ata_present();
+
+    int mounted = 0;
+    if (fs_disk) {
+        uint8_t sb[FS_SECTOR_SIZE];
+        fs_sb_t* sp = (fs_sb_t*)(void*)sb;
+        int ok = (ata_read_sectors(FS_DISK_SB_LBA, 1, sb) == 0 &&
+                  sp->magic[0] == 'A' && sp->magic[1] == 'R' &&
+                  sp->magic[2] == 'C' && sp->magic[3] == 'F' &&
+                  sp->magic[4] == 'S' &&
+                  sp->version == FS_DISK_VERSION &&
+                  sp->block_size == FS_BLOCK_SIZE &&
+                  sp->num_blocks == FS_NUM_BLOCKS &&
+                  sp->data_start_lba == FS_DISK_DATA_LBA);
+        if (ok) {
+            ok = ata_read_sectors(FS_DISK_DIR_LBA, FS_DIR_SECTORS, fs_dir_scratch) == 0;
+            if (ok)
+                memcpy(fs_files, fs_dir_scratch, sizeof(fs_file_t) * FS_MAX_FILES);
+            int chunk = 128;
+            for (uint32_t off = 0; ok && off < FS_NUM_BLOCKS; off += chunk) {
+                int n = FS_NUM_BLOCKS - (int)off;
+                if (n > chunk) n = chunk;
+                if (ata_read_sectors(FS_DISK_DATA_LBA + off, (uint8_t)n,
+                                     fs_arena + off * FS_BLOCK_SIZE) != 0)
+                    ok = 0;
+            }
+        }
+        if (ok) {
+            /* Rebuild the block bitmap from the loaded file table. */
+            int used = 0;
+            for (int i = 0; i < FS_MAX_FILES; i++) {
+                if (!fs_files[i].used) continue;
+                used++;
+                fs_files[i].pos = 0;
+                for (uint32_t j = 0; j < fs_files[i].blocks; j++)
+                    fs_bmap_set((int)fs_files[i].start_block + (int)j, 1);
+            }
+            mounted = 1;
+            terminal_putstring("FS: mounted from disk, ");
+            terminal_print_int(used);
+            terminal_putstring(" files\n");
+        }
+    }
+
+    if (!mounted) {
+        fs_format();
+        if (fs_disk)
+            terminal_putstring("FS: formatted new volume\n");
+        else
+            terminal_putstring("FS: RAM-only (no ATA disk)\n");
+
+        /* Seed a welcome file so the filesystem is demonstrably working. */
+        const char* text =
+            "Welcome to ARC OS!\n"
+            "Commands: help, clear, ls, echo, cat <file>, rm <file>\n";
+        uint32_t len = 0;
+        while (text[len]) len++;
+        int fd = fs_open("welcome.txt", 1);
+        fs_write(fd, text, len);
+    }
+
+    fs_disk_fs_local_ok = 1;
+    fs_check_ret(fs_ret_saved);
+    terminal_putstring("FS: ret-ok pre-selftest\n");
     fs_selftest();
+    fs_check_ret(fs_ret_saved);
+    terminal_putstring("FS: ret-ok post-selftest\n");
 }
 
 static void fs_selftest(void) {
@@ -161,6 +293,7 @@ int fs_open(const char* name, int create) {
             fs_files[i].start_block = 0;
             fs_files[i].pos = 0;
             fs_name_copy(&fs_files[i], name);
+            fs_persist_dir();
             return FS_SLOT_FIRST + i;
         }
     }
@@ -201,6 +334,8 @@ int fs_write(int fd, const void* buf, size_t count) {
 
     memcpy(fs_arena + (uintptr_t)f->start_block * FS_BLOCK_SIZE + f->size, buf, count);
     f->size = need;
+    fs_persist_file(f);
+    fs_persist_dir();
     return (int)count;
 }
 
@@ -230,6 +365,7 @@ int fs_delete(const char* name) {
     f->blocks = 0;
     f->start_block = 0;
     f->pos = 0;
+    fs_persist_dir();
     return 0;
 }
 

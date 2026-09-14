@@ -13,6 +13,14 @@ static uint32_t acpi_ioapic_addr = 0;
 static int acpi_cpu_count = 0;
 static uint8_t* acpi_madt = 0;
 
+/* Interrupt-source overrides: IRQ -> GSI + polarity/trigger, filled from
+ * MADT type-2 entries. Default when absent: IRQn routed to GSI n as an
+ * active-high edge (which is what QEMU describes for the ISA lines). */
+#define ACPI_ISO_MAX 16
+static uint8_t acpi_iso_gsi[ACPI_ISO_MAX];
+static uint8_t acpi_iso_pol[ACPI_ISO_MAX];
+static uint8_t acpi_iso_trig[ACPI_ISO_MAX];
+
 static uint8_t acpi_checksum(const uint8_t* p, int len) {
     uint8_t sum = 0;
     for (int i = 0; i < len; i++) sum = (uint8_t)(sum + p[i]);
@@ -65,6 +73,11 @@ void acpi_init(void) {
         terminal_putstring("ACPI: no RSDP found\n");
         return;
     }
+    for (int i = 0; i < ACPI_ISO_MAX; i++) {
+        acpi_iso_gsi[i] = (uint8_t)i;
+        acpi_iso_pol[i] = 0;
+        acpi_iso_trig[i] = 0;
+    }
     uint8_t rev = r[15];
     uint32_t rsdt = r[16] | (r[17] << 8) | (r[18] << 16) | (r[19] << 24);
     uint64_t xsdt = 0;
@@ -112,6 +125,15 @@ void acpi_init(void) {
                 } else if (type == 5) {
                     /* LAPIC address override. */
                     acpi_lapic_addr = *(uint32_t*)(t + off + 4);
+                } else if (type == 2) {
+                    uint8_t src = t[off + 4];
+                    uint8_t gsi = t[off + 6];
+                    uint16_t fl = t[off + 7] | (t[off + 8] << 8);
+                    if (src < ACPI_ISO_MAX) {
+                        acpi_iso_gsi[src] = gsi;
+                        acpi_iso_pol[src] = fl & 1;           /* 1 = low active */
+                        acpi_iso_trig[src] = (fl >> 1) & 1;   /* 1 = level      */
+                    }
                 }
                 off += len;
             }
@@ -136,3 +158,13 @@ void acpi_init(void) {
 uint32_t acpi_lapic_base(void) { return acpi_lapic_addr; }
 uint32_t acpi_ioapic_base(void) { return acpi_ioapic_addr; }
 int acpi_cpu_total(void) { return acpi_cpu_count; }
+
+/* Look up the wired GSI (and polarity/trigger) for an ISA IRQ.
+ * Returns 0 and fills the out-params, or -1 if the IRQ is out of range. */
+int acpi_iso_get(int irq, int* gsi, int* pol, int* trig) {
+    if (irq < 0 || irq >= ACPI_ISO_MAX || !acpi_madt) return -1;
+    if (gsi)  *gsi  = acpi_iso_gsi[irq];
+    if (pol)  *pol  = acpi_iso_pol[irq];
+    if (trig) *trig = acpi_iso_trig[irq];
+    return 0;
+}

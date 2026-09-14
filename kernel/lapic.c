@@ -50,6 +50,12 @@ void lapic_eoi(void) {
     if (lapic) lapic_write(LAPIC_EOI, 0);
 }
 
+/* Disconnect the legacy PIC (ExtINT, LINT0) now that the IOAPIC routes
+ * device IRQs. Masked LINT0 also silences any straggling ExtINT. */
+void lapic_mask_extint(void) {
+    if (lapic) lapic_write(LAPIC_LVT_LINT0, 0x10000);
+}
+
 /* Preemption handler: LAPIC timer tick (vector 0x40). */
 uint64_t apic_timer_handler(uint64_t rsp) {
     lapic_eoi();
