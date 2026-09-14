@@ -26,7 +26,7 @@ objs64 = []
 for src in (['kernel/%s.c' % s for s in
              ['kernel', 'console', 'gdt', 'idt', 'interrupts',
               'memory', 'fs', 'scheduler', 'syscall', 'pmm', 'vmm',
-              'timer', 'user', 'serial', 'acpi', 'lapic']]
+              'timer', 'user', 'serial', 'acpi', 'exceptions', 'lapic']]
             + ['boot/entry64.S', 'kernel/isr.S']):
     name = os.path.basename(src).replace('.c', '.o').replace('.S', '.o')
     out = os.path.join(BUILD, 'k_' + name)

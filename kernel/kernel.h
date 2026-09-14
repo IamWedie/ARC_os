@@ -107,6 +107,10 @@ void irq1_stub(void);
 uint64_t irq0_handler(uint64_t rsp);
 int kbd_getchar(void);
 
+/* CPU exceptions (vectors 0..31) */
+void exception_gate_init(void);
+void exception_handler(void* frame);
+
 /* PIT timer */
 void pit_init(void);
 void pit_init_freq(uint32_t hz);

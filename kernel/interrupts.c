@@ -103,6 +103,9 @@ void interrupts_init(void) {
     idt_set_gate(33, (uint64_t)irq1_stub, 0x08, 0x8E);
     idt_set_gate(0x40, (uint64_t)apic_timer_stub, 0x08, 0x8E);
 
+    /* CPU exceptions (vectors 0..31) now fault into the panic handler. */
+    exception_gate_init();
+
     /* int 0x80 syscall gate: present, ring-3, 64-bit interrupt gate (0xEE) */
     idt_set_gate(0x80, (uint64_t)syscall_stub, 0x08, 0xEE);
 
