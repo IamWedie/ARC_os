@@ -18,6 +18,8 @@ void kernel_main(uint64_t multiboot_addr) {
     pmm_init(multiboot_addr);
     vmm_init();
 
+    acpi_init();
+
     terminal_putstring("Physical memory: ");
     terminal_print_int(pmm_total_mem() >> 20);
     terminal_putstring(" MiB total, ");
@@ -28,8 +30,13 @@ void kernel_main(uint64_t multiboot_addr) {
     gdt_init();
     idt_init();
     interrupts_init();
-    scheduler_init();
+    lapic_init();
+    lapic_timer_start();
+    /* The PIT now drives the 100 Hz IRQ0 after calibration is done. */
     pit_init();
+    /* Mask PIT IRQ0 in the PIC: the LAPIC timer is now the tick source. */
+    outb(0x21, 0x01);
+    scheduler_init();
     fs_init();
     
     /* Print system info */

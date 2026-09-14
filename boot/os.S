@@ -11,6 +11,18 @@
     .long MB_FLAGS
     .long MB_CHECKSUM
 
+/* Xen PVH ELF note: lets QEMU's -kernel loader boot our ELF directly
+ * in 32-bit protected mode. Our _start already handles the 32->64
+ * transition. */
+.section .note.Xen, "a", @note
+    .align 4
+    .long 4            /* name length */
+    .long 4            /* desc length (32-bit entry) */
+    .long 18           /* type = XEN_ELFNOTE_PHYS32_ENTRY */
+    .ascii "Xen\0\0\0" /* name "Xen" padded to 4 */
+    .long _start       /* 32-bit physical entry point */
+    .align 8
+
 .section .bss
     .space 16384
 stack_bottom:

@@ -43,14 +43,21 @@ void vmm_init(void) {
     /* First 2 MiB always present: low memory, BIOS/VGA, boot stub. */
     vmm_map_2mb(0, 0);
 
-    /* Identity-map usable RAM referenced by the multiboot memory map. */
+    /* Identity-map all physical regions referenced by the multiboot memory
+     * map (both available and reserved: reserved regions hold ACPI tables,
+     * e.g. QEMU parks them in the top 1 MiB of RAM which is reported as
+     * reserved). Physical addresses are identity-mapped so any table at any
+     * physical address is accessible. */
     uint32_t n = pmm_region_count_get();
     for (uint32_t i = 0; i < n; i++) {
         struct pmm_region r = pmm_region_get(i);
-        if (r.type != MBOOT_MMAP_AVAILABLE) continue;
+        uint64_t claimed_end = r.base + r.len;
         uint64_t start = (r.base + 0x1FFFFF) & ~0x1FFFFFULL; /* round up */
-        uint64_t end   = (r.base + r.len) & ~0x1FFFFFULL;    /* round down */
-        for (uint64_t a = start; a < end && a >= start; a += 0x200000) {
+        /* Iterate over each 2 MiB page that overlaps the claimed range;
+         * the last page may only partially overlap (region ends at a
+         * non-2 MiB boundary), but identity-mapping the whole page of real
+         * RAM is harmless and keeps tables near the top of RAM reachable. */
+for (uint64_t a = start; a < claimed_end && a >= start; a += 0x200000) {
             uint64_t pdpti = (a >> 30) & 0x1FF;
             if (pdpti >= VMM_PD_COUNT) break;
             vmm_map_2mb(a, a);

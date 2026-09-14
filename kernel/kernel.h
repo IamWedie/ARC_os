@@ -166,6 +166,18 @@ void serial_putchar(char c);
 void serial_write(const char* s, uint32_t len);
 int serial_init(void);
 
+/* ACPI / APIC */
+void acpi_init(void);
+uint32_t acpi_lapic_base(void);
+uint32_t acpi_ioapic_base(void);
+int acpi_cpu_total(void);
+void lapic_init(void);
+void lapic_eoi(void);
+void lapic_timer_start(void);
+uint64_t apic_timer_handler(uint64_t rsp);
+void apic_timer_stub(void);
+extern volatile int pit_tick_count;
+
 /* Userspace */
 long syscall_dispatch(uint64_t n, uint64_t a1, uint64_t a2, uint64_t a3);
 void syscall_stub(void);

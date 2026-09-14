@@ -73,6 +73,24 @@ irq1_stub:
     iretq
 
 /*
+ * Local APIC timer preemption point (vector 0x40). Mirrors irq0_stub:
+ * passes its stack pointer to apic_timer_handler and context switches on
+ * the returned stack pointer if the scheduler picked another process.
+ */
+.globl apic_timer_stub
+.type apic_timer_stub, @function
+apic_timer_stub:
+    PUSHREGS
+    movq %rsp, %rdi
+    call apic_timer_handler
+    testq %rax, %rax
+    jz 1f
+    movq %rax, %rsp
+1:
+    POPREGS
+    iretq
+
+/*
  * int 0x80 syscall gate (DPL 3). A privilege transition happens on entry so
  * the kernel stack is auto-selected via TSS RSP0; the user's SysV args are
  * still in rdi/rsi/rdx/rcx when we arrive. We forward them to the C

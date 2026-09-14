@@ -45,11 +45,11 @@ static inline int pmm_is_free(uint64_t frame) {
 
 /* Clamp [base, base+len) to the managed window and mark free (clear). */
 static void pmm_release(uint64_t base, uint64_t len) {
-    if (base >= PMM_MAX_PHYS) return;
+    if (base >= PMM_MAX_PHYS || len == 0) return;
     uint64_t end = base + len;
     if (end > PMM_MAX_PHYS) end = PMM_MAX_PHYS;
     uint64_t f0 = (base + PMM_PAGE_SIZE - 1) >> 12;
-    uint64_t f1 = (end >> 12) - 1;
+    uint64_t f1 = (end - 1) >> 12;
     if (f1 < f0) return;
     for (uint64_t f = pmm_frame_hi(f0); f <= pmm_frame_hi(f1); f++) {
         if (!pmm_is_free(f)) {
@@ -60,11 +60,11 @@ static void pmm_release(uint64_t base, uint64_t len) {
 }
 
 static void pmm_reserve(uint64_t base, uint64_t len) {
-    if (base >= PMM_MAX_PHYS) return;
+    if (base >= PMM_MAX_PHYS || len == 0) return;
     uint64_t end = base + len;
     if (end > PMM_MAX_PHYS) end = PMM_MAX_PHYS;
     uint64_t f0 = (base + PMM_PAGE_SIZE - 1) >> 12;
-    uint64_t f1 = (end >> 12) - 1;
+    uint64_t f1 = (end - 1) >> 12;
     if (f1 < f0) return;
     for (uint64_t f = pmm_frame_hi(f0); f <= pmm_frame_hi(f1); f++) {
         if (pmm_is_free(f)) {

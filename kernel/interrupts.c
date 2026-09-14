@@ -11,10 +11,14 @@ uint8_t inb(uint16_t port) {
     return v;
 }
 
-/* Timer interrupt handler (IRQ0, vector 32): preemption point. */
+/* Timer interrupt handler (IRQ0, vector 32). During the LAPIC transition it
+ * only acknowledges the PIT tick and feeds the calibration counter; the real
+ * preemption tick is provided by the LAPIC timer (vector 0x40). */
 uint64_t irq0_handler(uint64_t rsp) {
+    (void)rsp;
+    pit_tick_count++;
     outb(0x20, 0x20);
-    return scheduler_switch(rsp);
+    return 0;
 }
 
 /* Keyboard scancode to ASCII maps (US layout, lower and shifted) */
@@ -97,6 +101,7 @@ void interrupts_init(void) {
 
     idt_set_gate(32, (uint64_t)irq0_stub, 0x08, 0x8E);
     idt_set_gate(33, (uint64_t)irq1_stub, 0x08, 0x8E);
+    idt_set_gate(0x40, (uint64_t)apic_timer_stub, 0x08, 0x8E);
 
     /* int 0x80 syscall gate: present, ring-3, 64-bit interrupt gate (0xEE) */
     idt_set_gate(0x80, (uint64_t)syscall_stub, 0x08, 0xEE);
