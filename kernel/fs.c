@@ -369,6 +369,37 @@ int fs_delete(const char* name) {
     return 0;
 }
 
+int fs_file_size(int fd) {
+    int slot = fd - FS_SLOT_FIRST;
+    if (slot < 0 || slot >= FS_MAX_FILES || !fs_files[slot].used) return -1;
+    return (int)fs_files[slot].size;
+}
+
+int fs_truncate(int fd) {
+    int slot = fd - FS_SLOT_FIRST;
+    if (slot < 0 || slot >= FS_MAX_FILES || !fs_files[slot].used) return -1;
+    fs_file_t* f = &fs_files[slot];
+    if (f->blocks > 0) fs_free_extent((int)f->start_block, (int)f->blocks);
+    f->size = 0;
+    f->blocks = 0;
+    f->start_block = 0;
+    f->pos = 0;
+    fs_persist_dir();
+    return 0;
+}
+
+int fs_rename(const char* oldname, const char* newname) {
+    int old = fs_find_slot(oldname);
+    if (old < 0) return -1;
+    int same = fs_find_slot(newname);
+    if (same >= 0 && same != old) {
+        if (fs_delete(newname) != 0) return -1;
+    }
+    fs_name_copy(&fs_files[old], newname);
+    fs_persist_dir();
+    return 0;
+}
+
 int fs_list(void) {
     terminal_putstring("Files:\n");
     for (int i = 0; i < FS_MAX_FILES; i++) {

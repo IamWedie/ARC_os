@@ -41,6 +41,10 @@ long syscall_dispatch(uint64_t n, uint64_t a1, uint64_t a2, uint64_t a3) {
     case SYS_CLOSE: return fs_close((int)a1);
     case SYS_LS:    fs_list(); return 0;
     case SYS_DEL:   return fs_delete((const char*)a1);
+    case SYS_SEEK:  return fs_seek((int)a1, (uint32_t)a2);
+    case SYS_SIZE:  return fs_file_size((int)a1);
+    case SYS_TRUNC: return fs_truncate((int)a1);
+    case SYS_RENAME:return fs_rename((const char*)a1, (const char*)a2);
     default:        return -1;
     }
 }

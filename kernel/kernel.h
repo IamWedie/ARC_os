@@ -164,6 +164,9 @@ int fs_close(int fd);
 int fs_seek(int fd, uint32_t pos);
 int fs_delete(const char* name);
 int fs_list(void);
+int fs_file_size(int fd);
+int fs_truncate(int fd);
+int fs_rename(const char* oldname, const char* newname);
 
 /* Serial (COM1) */
 void serial_putchar(char c);
@@ -218,7 +221,10 @@ extern unsigned char _binary_user_shell_bin_size[];
 #define SYS_CLOSE 5
 #define SYS_LS    6
 #define SYS_DEL   7
-#define SYS_HELP  8
+#define SYS_SEEK  8
+#define SYS_SIZE  9
+#define SYS_TRUNC 10
+#define SYS_RENAME 11
 
 /* Kernel entry */
 void kernel_main(uint64_t multiboot_addr);

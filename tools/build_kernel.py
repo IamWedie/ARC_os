@@ -2,7 +2,7 @@ import os, subprocess, sys, glob
 
 ROOT = r"C:/Users/wadia/os_project"
 BUILD = r"C:/Users/wadia/AppData/Local/Temp/opencode/build"
-ZIG = r"C:/Users/wadia/AppData/Local/Microsoft/WinGet/Links/zig.exe"
+ZIG = r"C:/Users/wadia/zig/ziglang/zig.exe"
 OBJCOPY = r"C:/msys64/ucrt64/bin/objcopy.exe"
 
 os.makedirs(BUILD, exist_ok=True)

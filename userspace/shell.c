@@ -11,6 +11,10 @@
 #define SYS_CLOSE 5
 #define SYS_LS    6
 #define SYS_DEL   7
+#define SYS_SEEK  8
+#define SYS_SIZE  9
+#define SYS_TRUNC 10
+#define SYS_RENAME 11
 
 #define STDIN  0
 #define STDOUT 1
@@ -69,10 +73,14 @@ static void run_command(const char* cmd) {
         print_str("ARC OS Commands:\n");
         print_str("  help                - Show this message\n");
         print_str("  clear               - Clear screen\n");
-        print_str("  ls                  - List files\n");
+        print_str("  ls                  - List files (with sizes)\n");
         print_str("  echo text           - Print text\n");
         print_str("  echo text to file    - Write text to a file\n");
         print_str("  cat <file>          - Print a file\n");
+        print_str("  touch <file>        - Create/update a file\n");
+        print_str("  cp <src> <dst>      - Copy a file\n");
+        print_str("  mv <src> <dst>      - Move/rename a file\n");
+        print_str("  truncate <file>     - Empty a file\n");
         print_str("  rm <file>           - Delete a file\n");
         print_str("  exit                - Exit shell\n");
         return;
@@ -188,6 +196,140 @@ static void run_command(const char* cmd) {
             print_str(fname);
             print_newline();
         }
+        return;
+    }
+
+    if (starts_with(cmd, "touch")) {
+        const char* fname = next_token(cmd + 5, tok, sizeof(tok));
+        if (tok[0] == '\0') {
+            print_str("usage: touch <file>\n");
+            return;
+        }
+        long fd = syscall4(SYS_OPEN, (long)fname, 1, 0);
+        if (fd < FS_FD0) {
+            print_str("touch: cannot create ");
+            print_str(fname);
+            print_newline();
+            return;
+        }
+        syscall4(SYS_CLOSE, fd, 0, 0);
+        return;
+    }
+
+    if (starts_with(cmd, "truncate")) {
+        const char* fname = next_token(cmd + 8, tok, sizeof(tok));
+        if (tok[0] == '\0') {
+            print_str("usage: truncate <file>\n");
+            return;
+        }
+        long fd = syscall4(SYS_OPEN, (long)fname, 0, 0);
+        if (fd < FS_FD0) {
+            print_str("truncate: no such file: ");
+            print_str(fname);
+            print_newline();
+            return;
+        }
+        syscall4(SYS_TRUNC, fd, 0, 0);
+        syscall4(SYS_CLOSE, fd, 0, 0);
+        return;
+    }
+
+    if (starts_with(cmd, "cp")) {
+        /* parse two whitespace-separated names from "cp <src> <dst>" */
+        const char* p = cmd + 2;
+        while (*p == ' ') p++;
+        const char* s1 = p;
+        while (*p && *p != ' ' && *p != '>') p++;
+        long s1len = p - s1;
+        while (*p == ' ') p++;
+        const char* s2 = p;
+        while (*p && *p != ' ' && *p != '>') p++;
+        long s2len = p - s2;
+        if (s1len == 0 || s2len == 0) {
+            print_str("usage: cp <src> <dst>\n");
+            return;
+        }
+        char src[80], dst[80];
+        if (s1len >= (long)sizeof(src)) s1len = sizeof(src) - 1;
+        if (s2len >= (long)sizeof(dst)) s2len = sizeof(dst) - 1;
+        for (long i = 0; i < s1len; i++) src[i] = s1[i];
+        src[s1len] = '\0';
+        for (long i = 0; i < s2len; i++) dst[i] = s2[i];
+        dst[s2len] = '\0';
+
+        long sr = syscall4(SYS_OPEN, (long)src, 0, 0);
+        if (sr < FS_FD0) {
+            print_str("cp: no such file: ");
+            print_str(src);
+            print_newline();
+            return;
+        }
+        long dr = syscall4(SYS_OPEN, (long)dst, 1, 0);
+        if (dr < FS_FD0) {
+            print_str("cp: cannot create ");
+            print_str(dst);
+            print_newline();
+            syscall4(SYS_CLOSE, sr, 0, 0);
+            return;
+        }
+        syscall4(SYS_TRUNC, dr, 0, 0);   /* overwrite semantics */
+        char cp_buf[256];
+        for (;;) {
+            long n = syscall4(SYS_READ, sr, (long)&cp_buf[0], (long)sizeof(cp_buf));
+            if (n <= 0) break;
+            long off = 0;
+            while (off < n) {
+                long w = syscall4(SYS_WRITE, dr, (long)&cp_buf[off], n - off);
+                if (w <= 0) break;
+                off += w;
+            }
+        }
+        syscall4(SYS_CLOSE, sr, 0, 0);
+        syscall4(SYS_CLOSE, dr, 0, 0);
+        print_str("cp: ");
+        print_str(src);
+        print_str(" -> ");
+        print_str(dst);
+        print_newline();
+        return;
+    }
+
+    if (starts_with(cmd, "mv")) {
+        const char* p = cmd + 2;
+        while (*p == ' ') p++;
+        const char* s1 = p;
+        while (*p && *p != ' ' && *p != '>') p++;
+        long s1len = p - s1;
+        while (*p == ' ') p++;
+        const char* s2 = p;
+        while (*p && *p != ' ' && *p != '>') p++;
+        long s2len = p - s2;
+        if (s1len == 0 || s2len == 0) {
+            print_str("usage: mv <src> <dst>\n");
+            return;
+        }
+        char src[80], dst[80];
+        if (s1len >= (long)sizeof(src)) s1len = sizeof(src) - 1;
+        if (s2len >= (long)sizeof(dst)) s2len = sizeof(dst) - 1;
+        for (long i = 0; i < s1len; i++) src[i] = s1[i];
+        src[s1len] = '\0';
+        for (long i = 0; i < s2len; i++) dst[i] = s2[i];
+        dst[s2len] = '\0';
+
+        long r = syscall4(SYS_RENAME, (long)src, (long)dst, 0);
+        if (r < 0) {
+            print_str("mv: cannot rename ");
+            print_str(src);
+            print_str(" to ");
+            print_str(dst);
+            print_newline();
+            return;
+        }
+        print_str("mv: ");
+        print_str(src);
+        print_str(" -> ");
+        print_str(dst);
+        print_newline();
         return;
     }
 
