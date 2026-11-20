@@ -61,6 +61,20 @@
     0 failures; full gate green including `exit` and `BOOT OK`.
   - Files: `kernel/kernel.h`, `kernel/scheduler.c`, `kernel/kernel.c`,
     `tests/test_scheduler.c`, `docs/specs/automatic-zombie-reaping.md`.
+- [x] Per-process POSIX descriptor layer ✅
+  - Spec: `docs/specs/posix-fd-layer-design.md` (status: implemented).
+  - Per-process fd tables (0/1/2 std), shared open file descriptions, `dup`,
+    deferred unlink, access-mode/seek checks; `SYS_DUP 13`, `SYS_OPEN` flags,
+    `SYS_SEEK` whence; `FS_DISK_VERSION 2` (older images reformatted).
+  - Refcount contract: `fs_open_slot()` takes no ref; `fd_open()` adds one slot
+    ref per OFD; dup/clone bump only OFD refs; release at OFD refs 0.
+  - **Behaviour change:** `echo text to file` now overwrites (truncates) instead
+    of appending (`O_WRONLY | O_CREAT | O_TRUNC`).
+  - Verify: fd 164 + fs-slot 37 host checks; full gate green with
+    `--expect-not alphabeta` and `--expect-not betaa`; QEMU `cat fdtest.txt` →
+    `beta`; `BOOT OK: 1675 bytes`; NO-SSE OK.
+  - Files: `kernel/fd.c`, `kernel/fs.c`, `kernel/syscall.c`, `userspace/shell.c`,
+    `tests/test_fd.c`, `tests/test_fs_slot.c`, `tests/run_all.bat`.
 - [ ] FAT32 driver with cache integration
 - [ ] fork/exec/wait implementation
 - [ ] /proc filesystem for process introspection

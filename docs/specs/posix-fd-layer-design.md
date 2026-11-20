@@ -1,7 +1,7 @@
 # Design: Per-Process POSIX Descriptor Layer
 
 **Date:** 2026-11-20
-**Status:** Draft for human approval
+**Status:** Implemented and verified (2026-11-20)
 **Owner:** ARC OS kernel/POSIX layer
 
 ## Intent and the why
@@ -299,15 +299,42 @@ the human partner.
    in addition to `process_build_common()`, so the kernel/idle context has a
    valid std-fd table even before the first user process exists.
 
-## What is left to the builder
+## Implementation status and verification
 
-The implementation order, exact file-by-file task breakdown, and verification
-checkpoints are intentionally left to the planning step after this design is
-approved. The builder should not invent new ABI numbers or resource limits
-without updating this document first.
+Implemented on branch `posix-fd-layer` after human approval of this design. The
+final slice was verified with the full quality gate
+`cmd /c tests\run_all.bat`:
+
+- Host suites: slab/memory 2269 checks, scheduler 343 checks, POSIX fd 164
+  checks, filesystem slot 37 checks — all with 0 failures.
+- Full kernel build and link OK; `NO-SSE` codegen guard OK.
+- TCP-serial QEMU shell: `cat fdtest.txt` prints `beta`, with both
+  `--expect-not alphabeta` and `--expect-not betaa` enforced in the boot gate;
+  `BOOT OK: 1675 bytes`.
+
+Refcount contract as implemented (binding): `fs_open_slot()` acquires no slot
+reference; `fd_open()` adds exactly one slot reference per open file
+description; `fd_dup()` and `fd_clone_process()` bump only the OFD `refs`;
+`fd_close()` / `fd_close_all()` call `fs_slot_release()` exactly once when OFD
+`refs` reaches 0. `FS_DISK_VERSION` is 2 and older images are reformatted.
+`SYS_DUP` is 13, `SYS_OPEN` takes flags, and `SYS_SEEK` takes `whence`.
+
+**Behaviour change:** `echo text to file` now opens with
+`O_WRONLY | O_CREAT | O_TRUNC` and **overwrites (truncates) the file** instead of
+appending. Writing `beta` over `alpha` leaves exactly `beta`, not `alphabeta`
+or `betaa`.
+
+## Known limitations
+
+Deferred minor items are tracked in the SDD ledger
+(`.superpowers/sdd/2026-11-20-posix-fd-layer/progress.md`); they are **not**
+fixed by this slice. They include: no dedicated two-write `O_APPEND` host test;
+`fd_clone_process()` assumes a fresh child fd table; `fs_format()` writes struct
+padding to disk; `fs_find_slot()` is not declared in `kernel/kernel.h`;
+`fs_slot_add_ref()` does not reject deleted slots. Seeking past EOF remains
+rejected because the allocator has no sparse-file support.
 
 ## Approval
 
-This design is not approved until the human partner explicitly accepts it.
-After approval, the next step is the written implementation plan, then RED/GREEN
-implementation.
+This design was approved by the human partner before implementation and is now
+implemented and verified as recorded above.

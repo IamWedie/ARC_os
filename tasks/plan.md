@@ -100,11 +100,12 @@ PMM (physical frames)
 | **COM1 receive path** | ✅ IRQ4 → vector 36, level-triggered IOAPIC route, 64-byte software ring, 14-byte FIFO trigger + receive-timeout for short lines | runtime `help`, `clear`, `touch runtime.txt`, `ls`, `exit` all complete correctly |
 | **Boot + interactive ring-3 runtime** | ✅ Long mode, memory, ACPI/LAPIC/IOAPIC, heap self-test, ring-3 shell, serial input | `tools/boot_test.py`: `arc> ` prompt, command output, `BOOT OK` |
 | **SSE-free codegen** | ✅ Kernel/user code builds with `-mno-sse -mno-sse2 -mno-mmx -mno-avx`; build rejects vector instructions | build-time `objdump` guard (`NO-SSE`) |
+| **Per-process POSIX fd layer** | ✅ Per-process fd tables over shared open file descriptions, `dup`, deferred unlink, access/seek checks; `echo text to file` now overwrites (truncates) | 164 fd + 37 fs host checks; full gate green; QEMU `cat fdtest.txt` → `beta` |
 
 ### ❌ Still Missing
 
 - Automatic reaping (idle reaper): ✅ process 0's idle loop now reaps zombies and frees their owned frames. Parent-aware `wait()` is still missing.
-- `fork`/`exec`/`wait` and a POSIX file-descriptor table (the current fd namespace is the FS slot index).
+- `fork`/`exec`/`wait`. The POSIX file-descriptor table is now implemented (per-process fds over shared open file descriptions); a future `fork` can clone it via `fd_clone_process()`.
 - FAT32 and on-disk filesystems: the kernel has an ATA PIO driver but only a RAM-backed FS.
 - Demand paging, copy-on-write, and recoverable page faults.
 - SMP: per-CPU slab slots exist but the kernel is effectively UP-only.
@@ -129,6 +130,9 @@ PMM (physical frames)
 |------|--------|--------|
 | Slab/memory host stress | ✅ 2269 checks, 0 failures | `cmd /c tests\run_tests.bat` |
 | Scheduler host tests | ✅ 343 checks, 0 failures (includes idle reaper) | `cmd /c tests\run_tests.bat` |
+| POSIX fd host tests | ✅ 164 checks, 0 failures | `cmd /c tests\run_tests.bat` |
+| Filesystem slot host tests | ✅ 37 checks, 0 failures | `cmd /c tests\run_tests.bat` |
+| POSIX fd boot gate | ✅ QEMU `cat fdtest.txt` → `beta`; `--expect-not alphabeta` and `--expect-not betaa`; `BOOT OK: 1675 bytes` | `cmd /c tests\run_all.bat` |
 | Test sensitivity (mutation) | ✅ 3 failures injected, 3 detected | mutated double-free check |
 | Full kernel build/link | ✅ 201,976-byte kernel ELF, 44,384-byte raw kernel | `python tools\build_kernel.py --quiet` |
 | Boot image | ✅ 66,868-byte `os.elf`, multiboot OK, kernel bytes verified at 0x200000 | build-script validation |
@@ -142,7 +146,7 @@ PMM (physical frames)
 | Goal | Tasks |
 |------|-------|
 | Automatic reaping (idle reaper) | ✅ Done: idle loop reaps zombies so owned frames are released at runtime |
-| Filesystem/POSIX foundation | POSIX fd table, open/read/write/close semantics with tests; then FAT32 read path |
+| Filesystem/POSIX foundation | ✅ Done: POSIX fd table, open/read/write/close/dup semantics with tests; FAT32 read path still pending |
 | Re-run gates | Host tests + full build + interactive boot after each thin slice |
 
 ---
@@ -187,6 +191,60 @@ idle loop. It reaps every zombie except the current process, using the existing
 | Timer tick observes a partly reaped process | Medium | `preempt_disable()` around the scan |
 | Reaper steals a zombie another caller wants | Low today | No parent-aware wait exists; documented in the spec |
 | Idle loop calls the scanner too often | Low | 16-entry scan, no allocation, one `hlt` per iteration |
+
+---
+
+### Active Slice: POSIX Descriptor Layer (2026-11-20)
+
+**Spec:** `docs/specs/posix-fd-layer-design.md`
+
+#### Overview
+
+Per-process fd tables point to shared open file descriptions (OFDs). Each
+`open()` creates one OFD holding the file slot, offset, flags and a refcount;
+`dup()` and a future `fork()` share the OFD so they share one offset. Closing
+the last fd for an OFD releases its single file-slot reference. Deleting an open
+file defers freeing its blocks until the last descriptor closes.
+
+#### Architecture Decisions
+
+- Fds are per-process and validated against that process's table; 0/1/2 are
+  standard in/out/err for every process.
+- The OFD owns exactly one slot reference: `fs_open_slot()` takes no ref,
+  `fd_open()` adds one, `dup`/clone bump only OFD refs, release at refs 0.
+- `FS_DISK_VERSION` is 2; older disk images are reformatted.
+- `SYS_DUP` is 13; `SYS_OPEN` takes flags and `SYS_SEEK` takes `whence`.
+- Access flags and seek bounds (`[0, size]`, no sparse files) are enforced at
+  the fd/syscall boundary; fd/OFD pools are fixed size (no dynamic allocation).
+
+#### Task List
+
+- [x] Per-process std fd table and fd host suite
+- [x] Shared open file descriptions, `dup`, refcount and pool-exhaustion tests
+- [x] Filesystem slot API with deferred unlink and real-fs host suite
+- [x] `--expect-not` boot-gate assertions for overwrite semantics
+- [x] Switch kernel/shell to POSIX fd syscalls; remove stale fd-shaped fs API
+- [x] Design doc status and verification evidence; full final gate
+
+#### Checkpoint: POSIX Descriptor Layer Complete
+
+- [x] Host suites green: 2269 + 343 + 164 + 37 checks, 0 failures
+- [x] Full build and `NO-SSE` build guard pass
+- [x] `cmd /c tests\run_all.bat` passes: QEMU `cat fdtest.txt` → `beta` with
+      `--expect-not alphabeta` and `--expect-not betaa`; `BOOT OK: 1675 bytes`
+
+#### Behaviour change
+
+`echo text to file` now opens with `O_WRONLY | O_CREAT | O_TRUNC` and
+**overwrites (truncates)** the target instead of appending.
+
+#### Risks and Mitigations
+
+| Risk | Impact | Mitigation |
+|------|--------|------------|
+| ABI flag change breaks the shell | High | All `SYS_OPEN` call sites updated; boot gate covers echo/cat/touch/cp paths |
+| Refcount bug leaks or double-frees a slot | High | Host tests assert one slot ref per OFD and net-zero after close-all |
+| Disk layout change loses existing files | Medium | `FS_DISK_VERSION` 2; older images reformatted |
 
 ---
 

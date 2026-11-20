@@ -6,7 +6,7 @@
   <img src="https://img.shields.io/badge/Boot-Multiboot%20%26%20BIOS-green" alt="Multiboot + BIOS">
 </p>
 
-A work-in-progress x86_64 operating system built entirely from scratch — no Linux, no Windows, no Unix. The verified foundation now includes a size-classed slab heap, a preemptive four-level MLFQ scheduler, and an interactive ring-3 shell; the filesystem/POSIX layer is next.
+A work-in-progress x86_64 operating system built entirely from scratch — no Linux, no Windows, no Unix. The verified foundation now includes a size-classed slab heap, a preemptive four-level MLFQ scheduler, an interactive ring-3 shell, and a per-process POSIX file-descriptor layer; FAT32 and fork/exec/wait are next.
 
 ---
 
@@ -38,8 +38,9 @@ ARC OS (ARC_OS) is a hobby operating system written entirely in **x86_64 Assembl
 - **Interrupt handling** — PIC/IOAPIC routing, LAPIC timer, keyboard IRQs, and COM1 receive interrupts
 - **Process scheduling** — preemptive four-level MLFQ scheduler with explicit process states and an idle fallback
 - **Device drivers** — VGA text console, PS/2 keyboard, interrupt-driven COM1 serial
-- **Filesystem** — In-memory file system with open/read/close/list operations
-- **System calls** — write, read, exit, open, close, ls, delete, seek, size, truncate, rename, clear
+- **Filesystem** — In-memory file system with slot-level operations and deferred unlink for open files
+- **POSIX descriptors** — Per-process fd tables with shared open file descriptions, `dup`, and close-on-exit
+- **System calls** — write, read, exit, open, close, dup, ls, delete, seek, size, truncate, rename, clear
 - **Userspace** — Interactive ring-3 shell with command parsing, usable over VGA or serial
 
 This project is an educational exploration of OS internals. No existing operating system code was used.
@@ -106,7 +107,9 @@ This project is an educational exploration of OS internals. No existing operatin
 - Slab heap — 12 size classes (16 B–32 KiB), PMM fallback for large allocations
 - Ring-3 user shell — loaded from an embedded blob and entered via `iretq`
 - Owned process frames — user code/stack runs are tracked per process and freed automatically by the idle reaper
-- System call gate — `int 0x80` for write, read, exit, open, close, ls, delete, seek, size, truncate, rename, clear
+- Per-process POSIX file descriptors — fd 0/1/2 per process, open file descriptions with shared offsets, `dup`, access-mode and seek-bound checks, and deferred unlink of open files
+- Overwrite semantics — `echo text to file` truncates the target file instead of appending to it
+- System call gate — `int 0x80` for write, read, exit, open, close, dup, ls, delete, seek, size, truncate, rename, clear
 - RAM-backed filesystem — file metadata plus a block arena
 - Build pipeline — Zig/lld + GNU objcopy, no MSYS2 shell required
 - Validated images — build fails unless the multiboot header and embedded kernel bytes are correct
@@ -138,7 +141,8 @@ ARC_os/
 │   ├── scheduler.c           # MLFQ scheduler, process states, context switching
 │   ├── syscall.c             # int 0x80 dispatcher
 │   ├── user.c                # Ring-3 shell loader
-│   ├── fs.c                  # RAM-backed filesystem
+│   ├── fs.c                  # RAM-backed filesystem + slot API
+│   ├── fd.c                  # Per-process fds + shared open file descriptions
 │   ├── timer.c               # PIT driver
 │   ├── lapic.c               # Local APIC + LAPIC timer
 │   ├── ioapic.c              # IOAPIC routing
@@ -160,7 +164,10 @@ ARC_os/
 │   ├── run_tests.bat         # Host slab/memory + scheduler suites
 │   ├── run_all.bat           # Full gate: host tests + build + interactive boot
 │   ├── test_slab_stress.c    # Links the real slab.c + memory.c
-│   └── test_scheduler.c      # Links the real scheduler.c
+│   ├── test_scheduler.c      # Links the real scheduler.c
+│   ├── test_fd.c             # POSIX fd layer, links real fd.c + fd_stub.c
+│   ├── fd_stub.c             # Fake fs slots / console I/O for fd tests
+│   └── test_fs_slot.c        # Real fs slot API + deferred unlink
 ├── docs/decisions/           # Architecture decision records
 ├── docs/specs/               # Implementation specs (process resource ownership)
 ├── tasks/                    # Plan and task tracker
@@ -231,7 +238,7 @@ build.bat
 | `build.bat --quiet` | Same build with command echoes suppressed |
 | `python build.py` | Python entry point for the same build |
 | `rebuild.bat` | Delete cached objects and rebuild from scratch |
-| `tests\run_tests.bat` | Host tests for the real slab/memory and scheduler code |
+| `tests\run_tests.bat` | Host tests for the real slab/memory, scheduler, POSIX fd and fs-slot code |
 | `tests\run_all.bat` | Full gate: host tests + build + interactive QEMU shell test |
 | `python tools\boot_test.py` | Boot in QEMU and validate serial markers; `--input` drives shell commands |
 
@@ -376,6 +383,7 @@ tables for the user mappings above.
 | `clear` | Clear the screen | `clear` |
 | `ls` | List files in the filesystem | `ls` |
 | `echo <text>` | Print text to screen | `echo Hello World` |
+| `echo <text> to <file>` | Write text to a file (overwrites/truncates) | `echo beta to notes.txt` |
 | `cat <file>` | Print a file | `cat notes.txt` |
 | `touch <file>` | Create an empty file | `touch notes.txt` |
 | `rm <file>` | Delete a file | `rm notes.txt` |
@@ -383,6 +391,9 @@ tables for the user mappings above.
 | `mv <src> <dst>` | Rename/move a file | `mv a.txt b.txt` |
 | `truncate <file>` | Truncate a file to zero length | `truncate notes.txt` |
 | `exit` | Exit the shell | `exit` |
+
+> **Note:** `echo text to file` now **overwrites (truncates)** the target file
+> instead of appending. Writing `beta` over `alpha` leaves exactly `beta`.
 
 ---
 
