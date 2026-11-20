@@ -1,10 +1,9 @@
 #include "kernel.h"
 
 int syscall_write(int fd, const char* buf, size_t count) {
-    for (size_t i = 0; i < count; i++) {
-        terminal_putchar(buf[i], terminal_color);
-    }
-    return count;
+    (void)fd;
+    terminal_write(buf, count);
+    return (int)count;
 }
 
 int syscall_read(int fd, char* buf, size_t count) {
@@ -24,6 +23,7 @@ int syscall_read(int fd, char* buf, size_t count) {
 
 void syscall_exit(int code) {
     terminal_putstring("[Process exited]\n");
+    scheduler_exit_current(code);
 }
 
 /* Entry for the int 0x80 gate. Args arrive in SysV order:
@@ -45,6 +45,7 @@ long syscall_dispatch(uint64_t n, uint64_t a1, uint64_t a2, uint64_t a3) {
     case SYS_SIZE:  return fs_file_size((int)a1);
     case SYS_TRUNC: return fs_truncate((int)a1);
     case SYS_RENAME:return fs_rename((const char*)a1, (const char*)a2);
+    case SYS_CLEAR: terminal_clear(); return 0;
     default:        return -1;
     }
 }

@@ -1,7 +1,10 @@
-*.o  
-*.bin  
-*.elf  
-*.img  
-*.zip  
-iso/  
-*.iso  
+*.o
+*.bin
+*.elf
+*.img
+*.zip
+*.iso
+*.exe
+iso/
+__pycache__/
+*.pyc

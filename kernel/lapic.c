@@ -135,6 +135,10 @@ static uint32_t lapic_calibrate(void) {
 }
 
 void lapic_timer_start(void) {
+    if (!lapic) {
+        terminal_putstring("LAPIC timer unavailable; no preemption tick\n");
+        return;
+    }
     uint32_t count = lapic_calibrate();
     lapic_write(LAPIC_TIMER_DIV, 0x3);              /* divide by 16 */
     /* periodic (bit 17), unmasked, vector 0x40 */

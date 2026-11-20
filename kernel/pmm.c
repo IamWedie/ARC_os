@@ -158,7 +158,7 @@ uint64_t pmm_free_mem(void)   { return pmm_free_frames << 12; }
 uint32_t pmm_region_count_get(void) { return pmm_region_count; }
 
 struct pmm_region pmm_region_get(uint32_t i) {
-    struct pmm_region r = {0, 0, 0};
+    struct pmm_region r = {0};
     if (i < pmm_region_count) r = pmm_regions[i];
     return r;
 }

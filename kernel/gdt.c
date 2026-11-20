@@ -28,12 +28,6 @@ struct tss_t {
     uint16_t iomap_base;
 } __attribute__((packed));
 
-#define GDT_SEL_KC 0x08   /* kernel code (ring 0) */
-#define GDT_SEL_KD 0x10   /* kernel data (ring 0) */
-#define GDT_SEL_UD 0x18   /* user data   (ring 3) */
-#define GDT_SEL_UC 0x1B   /* user code   (ring 3) */
-#define GDT_SEL_TSS 0x28  /* TSS (ring 0) */
-
 #define GDT_ENTRIES 7
 
 struct gdt_entry gdt[GDT_ENTRIES];
@@ -75,6 +69,9 @@ void gdt_init(void) {
     gdt_ptr_data.limit = sizeof(gdt) - 1;
     gdt_ptr_data.base = (uint64_t)&gdt;
 
+    /* No I/O permission bitmap: point past the TSS limit. */
+    tss.iomap_base = sizeof(struct tss_t);
+    tss.rsp0 = 0;
     gdt_set_tss((uint64_t)&tss);
 
     __asm__ volatile(

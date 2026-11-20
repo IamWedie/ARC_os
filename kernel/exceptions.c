@@ -52,7 +52,11 @@ static void pn(const char* label, uint64_t v) {
 }
 
 static void dump_gprs(const exc_frame_t* f) {
-    const uint64_t* r = &f->r15;
+    /* Copy by value: taking a pointer into a packed struct is unaligned. */
+    const uint64_t r[15] = {
+        f->r15, f->r14, f->r13, f->r12, f->rbp, f->rbx, f->r11,
+        f->r10, f->r9, f->r8, f->rdi, f->rsi, f->rdx, f->rcx, f->rax
+    };
     static const char* name[15] = {
         "r15", "r14", "r13", "r12", "rbp", "rbx", "r11",
         "r10", "r9", "r8", "rdi", "rsi", "rdx", "rcx", "rax"

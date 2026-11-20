@@ -1,97 +1,428 @@
-import os, subprocess, sys, glob
+#!/usr/bin/env python3
+"""
+ARC OS full build: kernel + embedded ring-3 shell + multiboot boot image.
 
-ROOT = r"C:/Users/wadia/os_project"
-BUILD = r"C:/Users/wadia/AppData/Local/Temp/opencode/build"
-ZIG = r"C:/Users/wadia/zig/ziglang/zig.exe"
-OBJCOPY = r"C:/msys64/ucrt64/bin/objcopy.exe"
+Produces os.elf, a 32-bit multiboot ELF that QEMU/GRUB can load directly.
+Every stage fails loudly; stale outputs are deleted before the build starts
+so a failed build can never leave a runnable-looking image behind.
 
-os.makedirs(BUILD, exist_ok=True)
+Usage:
+    python tools/build_kernel.py
+    python tools/build_kernel.py --keep-build   # reuse objects in BUILD
 
-def run(cmd):
-    print('+ ' + ' '.join(cmd))
-    r = subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True)
-    if r.stdout: print(r.stdout, end='')
-    if r.stderr: sys.stderr.write(r.stderr)
+Environment overrides:
+    ZIG        path to zig.exe
+    OBJCOPY    path to objcopy.exe
+    ARC_BUILD  build directory (default: <temp>/opencode/arc_build)
+"""
+import glob
+import os
+import shutil
+import struct
+import subprocess
+import sys
+import tempfile
+
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+BUILD = os.environ.get(
+    "ARC_BUILD",
+    os.path.join(tempfile.gettempdir(), "opencode", "arc_build"),
+)
+
+MULTIBOOT_MAGIC = 0x1BADB002
+KERNEL_LOAD = 0x200000
+QUIET = False
+
+
+class BuildError(RuntimeError):
+    pass
+
+
+def log(msg):
+    print(msg, flush=True)
+
+
+def run(cmd, cwd=ROOT, capture=True):
+    shown = " ".join(cmd)
+    if not QUIET:
+        log("+ " + shown)
+    try:
+        r = subprocess.run(cmd, cwd=cwd, capture_output=capture, text=True,
+                           errors="replace")
+    except OSError as exc:
+        raise BuildError("could not execute %s: %s" % (cmd[0], exc))
+    if r.stdout:
+        sys.stdout.write(r.stdout)
+        sys.stdout.flush()
+    if r.stderr:
+        sys.stderr.write(r.stderr)
+        sys.stderr.flush()
     if r.returncode != 0:
-        print('FAILED (exit %d)' % r.returncode)
+        raise BuildError("command failed (exit %d): %s"
+                         % (r.returncode, shown))
+    return r
+
+
+def find_tool(env_name, candidates, version_args, what):
+    seen = []
+    for path in candidates:
+        if not path:
+            continue
+        path = os.path.abspath(os.path.expandvars(path))
+        if path in seen:
+            continue
+        seen.append(path)
+        if not os.path.isfile(path):
+            continue
+        try:
+            r = subprocess.run([path] + version_args, capture_output=True,
+                               text=True, timeout=20)
+        except (OSError, subprocess.TimeoutExpired):
+            continue
+        if r.returncode == 0:
+            return path, (r.stdout or r.stderr).strip().splitlines()[0]
+    raise BuildError(
+        "%s not found. Set %s or install it.\nTried:\n  %s"
+        % (what, env_name, "\n  ".join(seen))
+    )
+
+
+def locate_toolchain():
+    localappdata = os.environ.get("LOCALAPPDATA", "")
+    zig_candidates = [
+        os.environ.get("ZIG"),
+        shutil.which("zig"),
+        os.path.join(localappdata, "Microsoft", "WinGet", "Packages"),
+        r"C:\Users\wadia\zig\ziglang\zig.exe",
+    ]
+    # Replace the WinGet package *directory* with every zig.exe under it.
+    expanded = []
+    for cand in zig_candidates:
+        if not cand:
+            continue
+        if os.path.isdir(cand):
+            expanded.extend(sorted(glob.glob(
+                os.path.join(cand, "zig.zig_*", "**", "zig.exe"),
+                recursive=True)))
+        else:
+            expanded.append(cand)
+    zig, zig_version = find_tool("ZIG", expanded, ["version"], "Zig")
+
+    objcopy_candidates = [
+        os.environ.get("OBJCOPY"),
+        shutil.which("objcopy"),
+        r"C:\msys64\ucrt64\bin\objcopy.exe",
+        r"C:\msys64\mingw64\bin\objcopy.exe",
+    ]
+    objcopy, objcopy_version = find_tool(
+        "OBJCOPY", objcopy_candidates, ["--version"], "objcopy")
+
+    return zig, zig_version, objcopy, objcopy_version
+
+
+def rel(path):
+    return os.path.relpath(path, ROOT)
+
+
+CC64 = None  # filled in by main()
+
+
+def compile_kernel(zig):
+    flags = CC64
+    objs = []
+
+    kernel_sources = sorted(glob.glob(os.path.join(ROOT, "kernel", "*.c")))
+    lib_sources = sorted(glob.glob(os.path.join(ROOT, "lib", "*.c")))
+    if not kernel_sources:
+        raise BuildError("no kernel sources found")
+
+    sources = [(src, "k_") for src in kernel_sources]
+    sources += [(src, "l_") for src in lib_sources]
+    sources += [
+        (os.path.join(ROOT, "boot", "entry64.S"), "k_"),
+        (os.path.join(ROOT, "kernel", "isr.S"), "k_"),
+    ]
+
+    for src, prefix in sources:
+        obj = os.path.join(
+            BUILD, prefix + os.path.basename(src).rsplit(".", 1)[0] + ".o")
+        run([zig, "cc"] + flags + ["-c", src, "-o", obj])
+        objs.append(obj)
+    return objs
+
+
+def build_user_shell(zig, objcopy):
+    user_flags = [
+        "-target", "x86_64-freestanding",
+        "-ffreestanding", "-fno-builtin",
+        "-fno-sanitize=all",
+        "-fno-asynchronous-unwind-tables", "-fno-unwind-tables",
+        "-fno-pic", "-fno-pie", "-fno-stack-protector",
+        "-mno-red-zone", "-mno-mmx", "-mno-sse", "-mno-sse2", "-mno-avx",
+        "-mcmodel=large", "-O2",
+    ]
+    user_elf = os.path.join(BUILD, "user_shell.elf")
+    user_bin = os.path.join(BUILD, "user_shell.bin")
+    user_obj = os.path.join(BUILD, "user_shell_bin.o")
+
+    run([zig, "cc"] + user_flags + [
+        "-nostdlib",
+        "-Wl,-T," + os.path.join(ROOT, "userspace", "link.ld"),
+        "-Wl,-e,_start",
+        "-Wl,--build-id=none",
+        "-Wl,-z,noexecstack",
+        "-o", user_elf,
+        os.path.join(ROOT, "userspace", "crt0.S"),
+        os.path.join(ROOT, "userspace", "shell.c"),
+    ])
+    run([objcopy, "-O", "binary", user_elf, user_bin])
+
+    # Run from BUILD so objcopy derives the plain basename symbols:
+    # _binary_user_shell_bin_{start,end,size}
+    run([objcopy, "-I", "binary", "-O", "elf64-x86-64",
+         "-B", "i386:x86-64",
+         "--rename-section", ".data=.userblob,alloc,load,readonly,data,contents",
+         "user_shell.bin", user_obj], cwd=BUILD)
+
+    size = os.path.getsize(user_bin)
+    if size == 0:
+        raise BuildError("ring-3 shell blob is empty")
+    log("USER BLOB  %s (%d bytes)" % (rel(user_bin), size))
+    return user_bin, user_obj
+
+
+def link_kernel(zig, objs, user_obj):
+    kernel_elf = os.path.join(BUILD, "os_kernel.elf")
+    run([zig, "cc"] + CC64 + [
+        "-nostdlib",
+        "-Wl,-T," + os.path.join(ROOT, "linker", "kernel64.ld"),
+        "-Wl,-e,_entry64",
+        "-Wl,--build-id=none",
+        "-Wl,-z,noexecstack",
+        "-o", kernel_elf,
+    ] + objs + [user_obj])
+    return kernel_elf
+
+
+def make_os_elf(zig, objcopy, kernel_elf):
+    kernel_bin = os.path.join(BUILD, "kernel.bin")
+    run([objcopy, "-O", "binary", kernel_elf, kernel_bin])
+
+    blob_obj = os.path.join(BUILD, "kernel_blob.o")
+    run([objcopy, "-I", "binary", "-O", "elf32-i386", "-B", "i386",
+         "--rename-section", ".data=.kernelblob,alloc,load,readonly,data,contents",
+         kernel_bin, blob_obj])
+
+    cc32 = [
+        "-target", "x86-freestanding",
+        "-ffreestanding", "-fno-builtin",
+        "-fno-sanitize=all",
+        "-fno-asynchronous-unwind-tables", "-fno-unwind-tables",
+        "-fno-pic", "-fno-pie", "-fno-stack-protector",
+        "-mno-red-zone", "-O2",
+    ]
+    boot_obj = os.path.join(BUILD, "boot32.o")
+    run([zig, "cc"] + cc32 + [
+        "-c", os.path.join(ROOT, "boot", "boot32.S"), "-o", boot_obj])
+
+    os_elf = os.path.join(ROOT, "os.elf")
+    run([zig, "cc"] + cc32 + [
+        "-nostdlib",
+        "-Wl,-T," + os.path.join(ROOT, "linker", "boot32.ld"),
+        "-Wl,-e,_start",
+        "-Wl,--build-id=none",
+        "-Wl,--no-gc-sections",
+        "-Wl,-z,noexecstack",
+        "-o", os_elf, boot_obj, blob_obj])
+
+    log("KERNEL BIN %s (%d bytes)" % (rel(kernel_bin),
+                                      os.path.getsize(kernel_bin)))
+    return os_elf, kernel_bin
+
+
+def verify_kernel_elf(path):
+    with open(path, "rb") as f:
+        hdr = f.read(64)
+    if len(hdr) < 64 or hdr[:4] != b"\x7fELF":
+        raise BuildError("kernel is not an ELF file")
+    if hdr[4] != 2:
+        raise BuildError("kernel ELF is not 64-bit")
+    e_machine = struct.unpack_from("<H", hdr, 18)[0]
+    e_entry = struct.unpack_from("<Q", hdr, 24)[0]
+    if e_machine != 62:  # EM_X86_64
+        raise BuildError("kernel ELF has wrong machine type %d" % e_machine)
+    if e_entry == 0:
+        raise BuildError("kernel ELF has a zero entry point")
+    log("KERNEL ELF %s (entry 0x%x, %d bytes)"
+        % (rel(path), e_entry, os.path.getsize(path)))
+
+
+def verify_no_vector_code(kernel_elf, objcopy):
+    """Reject vector/MMX instructions: the boot path never enables SSE.
+
+    Kernel code runs with CR4.OSFXSR clear, so any xmm/mmx instruction is a
+    guaranteed #UD.  A compiler upgrade silently re-enabling auto-vectorization
+    would otherwise produce a kernel that dies before the first serial byte.
+    """
+    objdump = os.path.join(os.path.dirname(objcopy), "objdump.exe")
+    if not os.path.isfile(objdump):
+        objdump = shutil.which("objdump")
+    if not objdump:
+        log("WARNING: objdump not found; skipping no-vector-code check")
+        return
+
+    r = subprocess.run([objdump, "-d", kernel_elf], capture_output=True,
+                       text=True, errors="replace")
+    if r.returncode != 0:
+        raise BuildError("objdump failed on the kernel image")
+
+    bad = []
+    for line in r.stdout.splitlines():
+        if any(reg in line for reg in ("%xmm", "%ymm", "%zmm", "%mm")):
+            bad.append(line.strip())
+    if bad:
+        raise BuildError(
+            "kernel text contains vector/MMX instructions, but SSE is not "
+            "enabled at boot (would #UD):\n  " + "\n  ".join(bad[:5]))
+    log("NO-SSE   kernel text has no vector/MMX instructions")
+
+
+def verify_multiboot_elf(path):
+    with open(path, "rb") as f:
+        data = f.read()
+    if len(data) < 64 or data[:4] != b"\x7fELF":
+        raise BuildError("os.elf is not an ELF file")
+    if data[4] != 1:
+        raise BuildError("os.elf must be ELF32 for QEMU/GRUB multiboot")
+    e_machine = struct.unpack_from("<H", data, 18)[0]
+    if e_machine != 3:  # EM_386
+        raise BuildError("os.elf has wrong machine type %d" % e_machine)
+
+    limit = min(len(data) - 12, 8192)
+    found = False
+    for off in range(0, limit + 1, 4):
+        magic, flags, checksum = struct.unpack_from("<III", data, off)
+        if magic != MULTIBOOT_MAGIC:
+            continue
+        if (magic + flags + checksum) & 0xFFFFFFFF:
+            raise BuildError("multiboot header at 0x%x has bad checksum" % off)
+        found = True
+        break
+    if not found:
+        raise BuildError(
+            "no valid multiboot header in the first 8 KiB of os.elf; "
+            "QEMU/GRUB will reject the image")
+    log("BOOT IMAGE %s (%d bytes, multiboot OK)"
+        % (rel(path), len(data)))
+
+
+def verify_embedded_kernel(os_elf, kernel_bin):
+    with open(os_elf, "rb") as f:
+        data = f.read()
+    with open(kernel_bin, "rb") as f:
+        kernel = f.read()
+    if not kernel:
+        raise BuildError("kernel blob is empty")
+
+    e_phoff = struct.unpack_from("<I", data, 28)[0]
+    e_phentsize = struct.unpack_from("<H", data, 42)[0]
+    e_phnum = struct.unpack_from("<H", data, 44)[0]
+    if e_phentsize < 32 or e_phnum == 0:
+        raise BuildError("os.elf has no program headers")
+
+    need_start = KERNEL_LOAD
+    need_end = KERNEL_LOAD + len(kernel)
+    for i in range(e_phnum):
+        off = e_phoff + i * e_phentsize
+        p_type, p_offset, p_vaddr, p_paddr, p_filesz, _ = struct.unpack_from(
+            "<IIIIII", data, off)
+        if p_type != 1:  # PT_LOAD
+            continue
+        if p_paddr <= need_start and p_paddr + p_filesz >= need_end:
+            src = p_offset + (need_start - p_vaddr)
+            if src < 0 or src + len(kernel) > len(data):
+                raise BuildError("embedded kernel segment is truncated")
+            if data[src:src + len(kernel)] != kernel:
+                raise BuildError(
+                    "embedded kernel bytes differ from kernel.bin")
+            log("EMBEDDED  %d-byte kernel present at 0x%x"
+                % (len(kernel), need_start))
+            return
+    raise BuildError(
+        "os.elf has no PT_LOAD covering [0x%x, 0x%x); the boot image "
+        "does not contain the kernel" % (need_start, need_end))
+
+
+def main(argv):
+    global CC64, QUIET
+
+    clean = "--clean" in argv
+    keep_build = "--keep-build" in argv
+    QUIET = "--quiet" in argv
+    allowed = {"--clean", "--keep-build", "--quiet"}
+    for arg in argv:
+        if arg not in allowed:
+            log("unknown argument: %s" % arg)
+            return 2
+    if clean and keep_build:
+        log("--clean and --keep-build cannot be combined")
+        return 2
+
+    zig, zig_version, objcopy, objcopy_version = locate_toolchain()
+    log("ARC OS build")
+    log("  zig:     %s (%s)" % (zig, zig_version))
+    log("  objcopy: %s (%s)" % (objcopy, objcopy_version))
+    log("  build:   %s" % BUILD)
+
+    if clean:
+        shutil.rmtree(BUILD, ignore_errors=True)
+    os.makedirs(BUILD, exist_ok=True)
+    if not keep_build:
+        for stale in glob.glob(os.path.join(BUILD, "*.o")):
+            os.remove(stale)
+    # Never leave a previous image that could be mistaken for this build.
+    for stale in (os.path.join(ROOT, "os.elf"),
+                  os.path.join(BUILD, "kernel.bin"),
+                  os.path.join(BUILD, "os_kernel.elf")):
+        if os.path.exists(stale):
+            os.remove(stale)
+
+    CC64 = [
+        "-target", "x86_64-freestanding",
+        "-ffreestanding", "-fno-builtin",
+        "-fno-sanitize=all",
+        "-fno-asynchronous-unwind-tables", "-fno-unwind-tables",
+        "-fno-pic", "-fno-pie", "-fno-stack-protector",
+        "-fno-omit-frame-pointer",
+        "-mno-mmx", "-mno-sse", "-mno-sse2", "-mno-avx",
+        "-mno-red-zone", "-O2",
+        "-I" + os.path.join(ROOT, "kernel"),
+        "-I" + os.path.join(ROOT, "lib"),
+    ]
+
+    log("\n[1/5] compiling kernel and libc objects")
+    objs = compile_kernel(zig)
+
+    log("\n[2/5] building ring-3 shell")
+    _, user_obj = build_user_shell(zig, objcopy)
+
+    log("\n[3/5] linking 64-bit kernel")
+    kernel_elf = link_kernel(zig, objs, user_obj)
+    verify_kernel_elf(kernel_elf)
+    verify_no_vector_code(kernel_elf, objcopy)
+
+    log("\n[4/5] embedding kernel in 32-bit boot image")
+    os_elf, kernel_bin = make_os_elf(zig, objcopy, kernel_elf)
+    verify_multiboot_elf(os_elf)
+    verify_embedded_kernel(os_elf, kernel_bin)
+
+    log("\n[5/5] BUILD OK -> %s" % os_elf)
+    return 0
+
+
+if __name__ == "__main__":
+    try:
+        sys.exit(main(sys.argv[1:]))
+    except BuildError as exc:
+        print("\nBUILD FAILED: %s" % exc, file=sys.stderr)
         sys.exit(1)
-
-# 64-bit kernel compile flags
-CC64 = [ZIG, 'cc', '-target', 'x86_64-freestanding', '-ffreestanding',
-        '-fno-builtin', '-fno-sanitize=all', '-fno-asynchronous-unwind-tables',
-        '-fno-unwind-tables', '-mno-red-zone', '-Ikernel']
-
-# ---------- Stage 1: compile 64-bit kernel objects ----------
-objs64 = []
-for src in (['kernel/%s.c' % s for s in
-             ['kernel', 'console', 'gdt', 'idt', 'interrupts',
-              'memory', 'fs', 'scheduler', 'syscall', 'pmm', 'vmm',
-              'timer', 'user', 'serial', 'acpi', 'exceptions', 'lapic',
-              'ioapic', 'ata']]
-            + ['boot/entry64.S', 'kernel/isr.S']):
-    name = os.path.basename(src).replace('.c', '.o').replace('.S', '.o')
-    out = os.path.join(BUILD, 'k_' + name)
-    run(CC64 + ['-c', src, '-o', out])
-    objs64.append(out)
-
-# ---------- Stage 1b: build the ring-3 user shell binary ----------
-CCU = [ZIG, 'cc', '-target', 'x86_64-freestanding', '-ffreestanding',
-       '-fno-builtin', '-fno-sanitize=all', '-fno-asynchronous-unwind-tables',
-       '-fno-unwind-tables', '-mno-red-zone', '-nostdlib']
-user_elf = os.path.join(BUILD, 'user_shell.elf')
-run(CCU + ['-Wl,-T,%s' % os.path.join(ROOT, 'userspace/link.ld'),
-           '-Wl,-e,_start',
-           '-o', user_elf,
-           os.path.join(ROOT, 'userspace/crt0.S'),
-           os.path.join(ROOT, 'userspace/shell.c')])
-user_bin = os.path.join(BUILD, 'user_shell.bin')
-run([OBJCOPY, '-O', 'binary', user_elf, user_bin])
-print('USER BLOB -> %s (%d bytes)' % (user_bin, os.path.getsize(user_bin)))
-
-# embed the user binary into the 64-bit kernel ELF as a .userblob object
-# (run from BUILD so the _binary_* symbols derive from the basename only)
-userblob = os.path.join(BUILD, 'user_shell_bin.o')
-r = subprocess.run([OBJCOPY, '-I', 'binary', '-O', 'elf64-x86-64', '-B', 'i386:x86-64',
-                    '--rename-section', '.data=.userblob',
-                    'user_shell.bin', userblob],
-                   cwd=BUILD, capture_output=True, text=True)
-if r.stdout: print(r.stdout, end='')
-if r.stderr: sys.stderr.write(r.stderr)
-if r.returncode != 0:
-    print('FAILED (exit %d)' % r.returncode)
-    sys.exit(1)
-objs64.append(userblob)
-
-# ---------- Stage 2: link 64-bit kernel ELF ----------
-kernelf = os.path.join(BUILD, 'os_kernel.elf')
-run(CC64 + ['-nostdlib',
-            '-Wl,-T,%s' % os.path.join(ROOT, 'linker/kernel64.ld'),
-            '-Wl,-e,_entry64',
-            '-o', kernelf] + objs64)
-
-# ---------- Stage 3: objcopy kernel ELF -> raw binary blob ----------
-kbin = os.path.join(ROOT, 'kernel.bin')
-run([OBJCOPY, '-O', 'binary', kernelf, kbin])
-print('KERNEL BLOB -> %s (%d bytes)' % (kbin, os.path.getsize(kbin)))
-
-# ---------- Stage 4: embed kernel blob as object + assemble/link stub ----------
-CC32 = [ZIG, 'cc', '-target', 'x86-freestanding', '-ffreestanding',
-        '-fno-builtin', '-fno-sanitize=all', '-fno-asynchronous-unwind-tables',
-        '-fno-unwind-tables']
-
-# convert raw kernel blob to an ELF32 object (its .kernelblob section is
-# linked at 0x200000 by boot32.ld). Done via objcopy (not zig assembler)
-# to avoid zig's compile cache going stale on the embedded blob.
-blobobj = os.path.join(BUILD, 'kernel_blob.o')
-run([OBJCOPY, '-I', 'binary', '-O', 'elf32-i386', '-B', 'i386',
-     '--rename-section', '.data=.kernelblob', kbin, blobobj])
-
-boot32o = os.path.join(BUILD, 'boot32.o')
-run(CC32 + ['-c', 'boot/boot32.S', '-o', boot32o])
-
-oself = os.path.join(ROOT, 'os.elf')
-run(CC32 + ['-nostdlib',
-            '-Wl,-T,%s' % os.path.join(ROOT, 'linker/boot32.ld'),
-            '-Wl,-e,_start',
-            '-o', oself, boot32o, blobobj])
-print('BOOT IMAGE -> %s (%d bytes)' % (oself, os.path.getsize(oself)))

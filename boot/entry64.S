@@ -11,7 +11,19 @@
 _entry64:
     leaq str_enter(%rip), %rsi
     call com1_puts64
-    leaq str_e_skip(%rip), %rsi
+
+    /* The boot GDT is ours now; reload all data segments from it. The
+     * selectors left by the bootloader refer to a descriptor table that no
+     * longer exists after boot32's lgdt. */
+    leaq str_e_movs(%rip), %rsi
+    call com1_puts64
+    movw $0x10, %ax
+    movw %ax, %ds
+    movw %ax, %es
+    movw %ax, %ss
+    movw %ax, %fs
+    movw %ax, %gs
+    leaq str_e_done(%rip), %rsi
     call com1_puts64
 
     /* Zero BSS */

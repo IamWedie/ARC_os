@@ -50,6 +50,12 @@ void terminal_putstring(const char* str) {
     while (*str) terminal_putchar(*str++, terminal_color);
 }
 
+void terminal_write(const char* buf, size_t count) {
+    for (size_t i = 0; i < count; i++) {
+        terminal_putchar(buf[i], terminal_color);
+    }
+}
+
 void terminal_setcolor(uint8_t color) { terminal_color = color; }
 
 static void print_uint(uint64_t n) {

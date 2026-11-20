@@ -119,6 +119,6 @@ void vmm_unmap_page(uint64_t vaddr) {
 /* Map `pages` contiguous physical frames at vaddr as user-accessible pages. */
 void vmm_create_user_mapping(uint64_t vaddr, uint64_t paddr, size_t pages) {
     for (size_t i = 0; i < pages; i++) {
-        vmm_map_page(vaddr + i * 4096, paddr + i * 4096, PG_USER | PG_WRITABLE);
+        vmm_map_page(vaddr + i * 4096, paddr + i * 4096, PG_USER | PG_RW);
     }
 }

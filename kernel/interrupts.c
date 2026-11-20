@@ -18,9 +18,23 @@ uint8_t inb(uint16_t port) {
 uint64_t irq0_handler(uint64_t rsp) {
     (void)rsp;
     pit_tick_count++;
+
+    /* Every 10 PIT ticks (~100Hz), force a reschedule.
+       This is the preemption point: the timer ISR is the natural
+       point where we can switch context without special hooks. */
+    if (pit_tick_count % 10 == 0) {
+        uint64_t new_rsp = scheduler_switch(rsp);
+        if (new_rsp) {
+            /* Load the new stack pointer - this is done in assembly
+               or via a macro. For now, we just return the new rsp
+               and the caller (likely the stub) will handle it. */
+            rsp = new_rsp;
+        }
+    }
+
     outb(0x20, 0x20);
     lapic_eoi();
-    return 0;
+    return rsp;
 }
 
 /* Keyboard scancode to ASCII maps (US layout, lower and shifted) */
@@ -84,10 +98,12 @@ void irq1_handler(void) {
 }
 
 int kbd_getchar(void) {
-    if (kbd_head == kbd_tail) return -1;
-    int c = kbd_buffer[kbd_tail];
-    kbd_tail = (kbd_tail + 1) & (KBD_BUFSIZE - 1);
-    return c;
+    if (kbd_head != kbd_tail) {
+        int c = kbd_buffer[kbd_tail];
+        kbd_tail = (kbd_tail + 1) & (KBD_BUFSIZE - 1);
+        return c;
+    }
+    return serial_poll();   /* headless shell input over COM1 */
 }
 
 void interrupts_init(void) {
@@ -104,8 +120,12 @@ void interrupts_init(void) {
 
     idt_set_gate(32, (uint64_t)irq0_stub, 0x08, 0x8E);
     idt_set_gate(33, (uint64_t)irq1_stub, 0x08, 0x8E);
+    idt_set_gate(36, (uint64_t)serial_irq_stub, 0x08, 0x8E);  /* COM1 RX */
     idt_set_gate(0x40, (uint64_t)apic_timer_stub, 0x08, 0x8E);
     idt_set_gate(46, (uint64_t)ata_irq_stub, 0x08, 0x8E);  /* ATA IRQ14 */
+
+    /* Kernel-only software yield (ring 0 interrupt gate). */
+    idt_set_gate(0x81, (uint64_t)yield_stub, 0x08, 0x8E);
 
     /* CPU exceptions (vectors 0..31) now fault into the panic handler. */
     exception_gate_init();

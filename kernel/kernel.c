@@ -17,6 +17,7 @@ void kernel_main(uint64_t multiboot_addr) {
     /* Physical + virtual memory first: everything depends on real RAM. */
     pmm_init(multiboot_addr);
     vmm_init();
+    kmem_init_early();
 
     acpi_init();
 
@@ -61,6 +62,12 @@ void kernel_main(uint64_t multiboot_addr) {
     /* Start the userspace shell (ring 3) as its own preemptible process. */
     if (user_process_create_from_blob() < 0)
         terminal_putstring("FAILED: user shell could not be loaded\n");
+
+    /*
+     * Hand the CPU to the first runnable process through the software-yield
+     * gate. This proves yield_stub works and avoids waiting for a timer tick.
+     */
+    scheduler_yield();
 
     /* Process 0 (kernel) becomes the idle loop. */
     while (1) {

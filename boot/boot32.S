@@ -28,6 +28,9 @@
 _start:
     cli
 
+    /* Multiboot does not guarantee a usable stack for the OS image. */
+    movl $stack_top, %esp
+
     /* Save multiboot info pointer (ebx) into edi; we pass it to the
      * kernel as the first argument once in long mode. */
     movl %ebx, %edi
@@ -123,8 +126,8 @@ str_pg:    .asciz "B32:paging\n"
 
 gdt:
     .quad 0x0000000000000000   /* null */
-    .quad 0x0020980000000000   /* 64-bit code, DPL0 */
-    .quad 0x0000900000000000   /* data */
+    .quad 0x0020980000000000   /* 64-bit code, DPL0, L=1 */
+    .quad 0x00CF92000000FFFF   /* flat data, writable (SS-safe) */
 gdt_descriptor:
     .word gdt_descriptor - gdt - 1
     .long gdt

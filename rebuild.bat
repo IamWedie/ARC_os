@@ -1,5 +1,16 @@
 @echo off
-C:\msys64\ucrt64\bin\gcc.exe -ffreestanding -nostdlib -m64 -mno-red-zone -c C:\Users\wadia\os_project\boot\os.S -o C:\Users\wadia\os_project\boot\os.o
-C:\msys64\ucrt64\bin\objcopy.exe -O binary C:\Users\wadia\os_project\boot\os.o C:\Users\wadia\os_project\os.bin
-C:\msys64\ucrt64\bin\gcc.exe -nostdlib -ffreestanding -m64 -Wl,--nmagic -o C:\Users\wadia\os_project\os.elf C:\Users\wadia\os_project\boot\os.o
-echo Build done!
+REM Clean rebuild of ARC OS (removes all cached build objects first).
+setlocal
+cd /d "%~dp0"
+
+echo === ARC OS Clean Rebuild ===
+python tools\build_kernel.py --clean %*
+if errorlevel 1 (
+    echo.
+    echo BUILD FAILED
+    exit /b 1
+)
+
+echo.
+echo Build complete: %CD%\os.elf
+exit /b 0

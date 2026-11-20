@@ -15,6 +15,12 @@
 #define SERIAL_MCR 4          /* modem control register    */
 #define SERIAL_LSR 5          /* line status register      */
 
+/* Software receive ring: the UART FIFO is only 16 bytes deep. */
+#define SERIAL_RX_SIZE 64
+static volatile uint8_t  serial_rx_buf[SERIAL_RX_SIZE];
+static volatile uint32_t serial_rx_head;
+static volatile uint32_t serial_rx_tail;
+
 static inline void serial_outb(uint16_t port, uint8_t val) {
     __asm__ volatile("outb %0, %1" : : "a"(val), "Nd"(port));
 }
@@ -35,7 +41,9 @@ int serial_init(void) {
     serial_outb(SERIAL_COM1 + SERIAL_IER, 0x00);  /* DLM high */
     serial_outb(SERIAL_COM1 + SERIAL_LCR, 0x03);  /* 8N1, DLAB off */
 
-    /* Enable + clear FIFOs, 16-byte threshold. */
+    /* Enable + clear FIFOs, 14-byte RX trigger. A burst costs one interrupt
+     * instead of one per byte; short lines are delivered by the 16550
+     * receive-timeout interrupt (4 character times). */
     serial_outb(SERIAL_COM1 + SERIAL_FCR, 0xC7);
 
     /* Loopback self-test: an echoed char should come back. */
@@ -47,6 +55,10 @@ int serial_init(void) {
     int ok = (got == 0xAE);
     if (ok) terminal_putstring("COM1 serial initialised (115200 8N1)\n");
     else    terminal_putstring("COM1 serial self-test FAILED\n");
+
+    /* Receive interrupts feed a software ring; the UART FIFO is only 16
+     * bytes, so bursts (a pasted shell line) would otherwise be dropped. */
+    serial_outb(SERIAL_COM1 + SERIAL_IER, 0x01);
     return ok;
 }
 
@@ -67,4 +79,26 @@ void serial_putchar(char c) {
 
 void serial_write(const char* s, uint32_t len) {
     for (uint32_t i = 0; i < len; i++) serial_putchar(s[i]);
+}
+
+int serial_poll(void) {
+    if (serial_rx_head == serial_rx_tail) return -1;
+    int c = serial_rx_buf[serial_rx_tail];
+    serial_rx_tail = (serial_rx_tail + 1) & (SERIAL_RX_SIZE - 1);
+    return c;
+}
+
+/* COM1 receive interrupt (IRQ4). Drain the UART FIFO into the software
+ * ring, then acknowledge the LAPIC and the legacy PIC. */
+void serial_irq_handler(void) {
+    while (serial_inb(SERIAL_COM1 + SERIAL_LSR) & 0x01) {
+        uint8_t c = serial_inb(SERIAL_COM1 + SERIAL_RBR);
+        uint32_t next = (serial_rx_head + 1) & (SERIAL_RX_SIZE - 1);
+        if (next != serial_rx_tail) {
+            serial_rx_buf[serial_rx_head] = (c == '\r') ? '\n' : c;
+            serial_rx_head = next;
+        }
+    }
+    outb(0x20, 0x20);
+    lapic_eoi();
 }

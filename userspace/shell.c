@@ -15,6 +15,7 @@
 #define SYS_SIZE  9
 #define SYS_TRUNC 10
 #define SYS_RENAME 11
+#define SYS_CLEAR 12
 
 #define STDIN  0
 #define STDOUT 1
@@ -87,7 +88,7 @@ static void run_command(const char* cmd) {
     }
 
     if (starts_with(cmd, "clear")) {
-        syscall4(SYS_EXIT, 0, 0, 0);
+        syscall4(SYS_CLEAR, 0, 0, 0);
         return;
     }
 

@@ -72,6 +72,14 @@ irq1_stub:
     POPREGS
     iretq
 
+.globl serial_irq_stub
+.type serial_irq_stub, @function
+serial_irq_stub:
+    PUSHREGS
+    call serial_irq_handler
+    POPREGS
+    iretq
+
 .globl ata_irq_stub
 .type ata_irq_stub, @function
 ata_irq_stub:
@@ -91,6 +99,23 @@ apic_timer_stub:
     PUSHREGS
     movq %rsp, %rdi
     call apic_timer_handler
+    testq %rax, %rax
+    jz 1f
+    movq %rax, %rsp
+1:
+    POPREGS
+    iretq
+
+/*
+ * Software yield (vector 0x81). Same stack-swap contract as the timer
+ * stubs: scheduler_yield_handler may return another process's saved stack.
+ */
+.globl yield_stub
+.type yield_stub, @function
+yield_stub:
+    PUSHREGS
+    movq %rsp, %rdi
+    call scheduler_yield_handler
     testq %rax, %rax
     jz 1f
     movq %rax, %rsp

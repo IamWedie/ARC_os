@@ -25,6 +25,7 @@
 
 #define IRQ_VEC_PIT    32
 #define IRQ_VEC_KBD    33
+#define IRQ_VEC_COM1   36
 #define IRQ_VEC_ATA    46
 
 static volatile uint32_t* ioapic = 0;
@@ -69,7 +70,7 @@ void ioapic_init(void) {
     }
 
     vmm_map_page(base, base, 0);
-    ioapic = (volatile uint32_t*)base;
+    ioapic = (volatile uint32_t*)(uintptr_t)base;
 
     uint32_t ver = ioapic_read_reg(IOAPIC_VER);
     uint32_t pins = ((ver >> 16) & 0xFF) + 1;
@@ -81,6 +82,18 @@ void ioapic_init(void) {
     /* Wire the IRQs we use to the same vectors the PIC used to provide. */
     ioapic_route_isa(0,  IRQ_VEC_PIT, 0);   /* stays masked: LAPIC is the tick */
     ioapic_route_isa(1,  IRQ_VEC_KBD, 1);
+
+    /* COM1 RX. The UART keeps its IRQ line asserted while the FIFO has
+     * data, so this pin must be level-triggered: edge delivery loses bytes
+     * that arrive while the handler is draining. */
+    {
+        int g, pol;
+        if (acpi_iso_get(4, &g, &pol, 0) < 0) { g = 4; pol = 0; }
+        uint32_t flags = RTE_LEVEL;
+        if (pol) flags |= RTE_ACTIVE_LOW;
+        ioapic_route((uint32_t)g, IRQ_VEC_COM1, flags);
+    }
+
     ioapic_route_isa(15, 0,          0);
 
     /* ATA primary channel. QEMU's MADT has no override for IRQ14, so the
@@ -107,7 +120,10 @@ void ioapic_init(void) {
     int g;
     if (acpi_iso_get(0, &g, 0, 0) < 0) g = 0;
     terminal_print_int(g);
-    terminal_putstring(" IRQ1->GSI1 IRQ14->GSI");
+    terminal_putstring(" IRQ1->GSI1 IRQ4->GSI");
+    if (acpi_iso_get(4, &g, 0, 0) < 0) g = 4;
+    terminal_print_int(g);
+    terminal_putstring(" IRQ14->GSI");
     if (acpi_iso_get(14, &g, 0, 0) < 0) g = 14;
     terminal_print_int(g);
     terminal_putstring("\n");

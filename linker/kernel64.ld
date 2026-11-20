@@ -6,6 +6,9 @@ SECTIONS
     .text : {
         *(.entry64)
         *(.text)
+    }
+
+    .rodata : {
         *(.rodata*)
     }
 

@@ -17,8 +17,10 @@ SECTIONS
     }
 
     /* Embedded 64-bit kernel blob at its load address.
-     * QEMU multiboot loads this segment into RAM at 0x200000. */
+     * KEEP is required: the blob is only referenced from this script, so
+     * --gc-sections would otherwise drop it. QEMU multiboot loads this
+     * segment into RAM at 0x200000. */
     .kernel 0x200000 : {
-        *(.kernelblob)
+        KEEP(*(.kernelblob))
     }
 }
