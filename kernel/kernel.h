@@ -69,6 +69,12 @@ void vmm_switch_address_space(int pid);
 int  as_create(int pid);
 int  as_map_user(int pid, uint64_t vaddr, uint64_t paddr,
                  size_t pages, uint8_t flags);
+/*
+ * Deep-copy the private user leaves of src_pid into a fresh address space for
+ * dst_pid. Returns 0 on success, -1 on bad pids or resource failure; on
+ * failure the child root is still valid and must be reaped by the caller.
+ */
+int  as_clone(int src_pid, int dst_pid);
 void as_destroy(int pid);
 uint64_t as_root(int pid);
 
@@ -104,6 +110,11 @@ int pt_unmap(uint64_t* root, uint64_t vaddr);
 void pt_clone_shared(uint64_t* src, uint64_t* dst);
 void pt_free_user_tables(uint64_t* root, const pt_ops_t* ops);
 int pt_count_user_pages(const uint64_t* root);
+/* Visit every present 4 KiB leaf in the private half of root, in VA order. */
+void pt_foreach_user_leaf(const uint64_t* root,
+                          void (*cb)(uint64_t va, uint64_t pa, uint64_t flags,
+                                     void* ctx),
+                          void* ctx);
 
 /* Heap (memory.c) */
 void* kmalloc(size_t size);

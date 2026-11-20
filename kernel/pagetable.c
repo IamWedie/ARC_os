@@ -157,3 +157,46 @@ int pt_count_user_pages(const uint64_t* root) {
     }
     return pages;
 }
+
+/*
+ * Walk the same leaves as pt_count_user_pages() and report each one to cb.
+ * Large pages are mappings rather than 4 KiB leaves, so they are skipped;
+ * only the user-settable bits are passed through to the caller.
+ */
+void pt_foreach_user_leaf(const uint64_t* root,
+                          void (*cb)(uint64_t va, uint64_t pa, uint64_t flags,
+                                     void* ctx),
+                          void* ctx) {
+    if (!root || !cb) return;
+
+    for (int i = PT_USER_SLOT_FIRST; i < 512; i++) {
+        uint64_t pml4e = root[i];
+        if (!(pml4e & PT_PG_PRESENT) || (pml4e & PT_PG_PSE)) continue;
+        const uint64_t* pdpt =
+            (const uint64_t*)(uintptr_t)(pml4e & PT_ADDR_MASK);
+
+        for (int j = 0; j < 512; j++) {
+            uint64_t pdpte = pdpt[j];
+            if (!(pdpte & PT_PG_PRESENT) || (pdpte & PT_PG_PSE)) continue;
+            const uint64_t* pd =
+                (const uint64_t*)(uintptr_t)(pdpte & PT_ADDR_MASK);
+
+            for (int k = 0; k < 512; k++) {
+                uint64_t pde = pd[k];
+                if (!(pde & PT_PG_PRESENT) || (pde & PT_PG_PSE)) continue;
+                const uint64_t* pt =
+                    (const uint64_t*)(uintptr_t)(pde & PT_ADDR_MASK);
+
+                for (int l = 0; l < 512; l++) {
+                    uint64_t entry = pt[l];
+                    if (!(entry & PT_PG_PRESENT) || (entry & PT_PG_PSE))
+                        continue;
+                    uint64_t va = ((uint64_t)i << 39) | ((uint64_t)j << 30) |
+                                  ((uint64_t)k << 21) | ((uint64_t)l << 12);
+                    cb(va, entry & PT_ADDR_MASK,
+                       entry & (PT_PG_RW | PT_PG_USER), ctx);
+                }
+            }
+        }
+    }
+}
