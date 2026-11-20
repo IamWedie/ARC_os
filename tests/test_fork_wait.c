@@ -1,11 +1,12 @@
 /*
- * ARC OS fork/wait host test (task 2).
+ * ARC OS fork/wait host test.
  *
  * Links against the REAL kernel/scheduler.c with tests/fork_wait_stub.c
- * supplying the hardware-facing pieces. This first slice verifies that
- * process_fork() copies the syscall trap frame into the timer-stub layout
- * that a context switch resumes through, and that child bookkeeping is
- * correct. Later tasks extend this same file with wait and dispatch tests.
+ * supplying the hardware-facing pieces. Verifies that process_fork() copies
+ * the syscall trap frame into the timer-stub layout that a context switch
+ * resumes through, that parent-aware exit/reaping keeps a parent's zombie for
+ * wait(), and that scheduler_wait_child() implements the collect/block/ECHILD
+ * policy. Later tasks extend this same file with syscall dispatch tests.
  */
 #include <stdint.h>
 #include <stdio.h>
@@ -225,12 +226,169 @@ static void test_fork_out_of_slots(void) {
           "run-queue invariants violated after failed fork");
 }
 
+/* Build a user parent with one forked child; returns the child pid. */
+static int make_parent_with_child(int* parent_out) {
+    int parent = make_user_parent();
+    if (parent <= 0) return -1;
+
+    syscall_frame_t frame;
+    fill_frame(&frame);
+    int child = process_fork(parent, &frame);
+    if (child <= 0) return -1;
+
+    *parent_out = parent;
+    return child;
+}
+
+static void test_parented_zombie_survives_idle_reaper(void) {
+    printf("\n=== Test 4: idle reaper skips parented zombies ===\n");
+    reset_world();
+
+    int parent = -1;
+    int child = make_parent_with_child(&parent);
+    CHECK(child > 0, "child fork failed (pid %d)", child);
+    if (child <= 0) return;
+
+    CHECK(scheduler_kill(child) == 0, "kill child failed");
+    CHECK(processes[child].state == PROC_ZOMBIE, "child not zombie");
+
+    /* The idle loop owns the reaper; it must not steal a parent's zombie. */
+    current_process = 0;
+    int reaped = scheduler_reap_zombies();
+    current_process = parent;
+
+    CHECK(processes[child].state == PROC_ZOMBIE,
+          "idle reaper stole parented zombie pid %d", child);
+    CHECK(reaped == 0, "idle reaper reaped %d processes, want 0", reaped);
+}
+
+static void test_exit_reparents_children(void) {
+    printf("\n=== Test 5: process exit reparents children to PID 0 ===\n");
+    reset_world();
+
+    int parent = -1;
+    int child = make_parent_with_child(&parent);
+    CHECK(child > 0, "child fork failed (pid %d)", child);
+    if (child <= 0) return;
+    CHECK(processes[child].ppid == parent, "precondition: ppid = %d",
+          processes[child].ppid);
+
+    /* Exercise the exit bookkeeping directly: the public entry point is
+     * noreturn (it loops on int $0x81), which a host test cannot execute. */
+    scheduler_exit_process(parent, 42);
+
+    CHECK(processes[parent].state == PROC_ZOMBIE,
+          "exiting process state = %d, want ZOMBIE", processes[parent].state);
+    CHECK(processes[parent].exit_code == 42,
+          "exit_code = %d, want 42", processes[parent].exit_code);
+    CHECK(processes[child].ppid == 0,
+          "orphaned child ppid = %d, want 0", processes[child].ppid);
+}
+
+static void test_child_exit_wakes_blocked_parent(void) {
+    printf("\n=== Test 6: child exit wakes a blocked parent ===\n");
+    reset_world();
+
+    int parent = -1;
+    int child = make_parent_with_child(&parent);
+    CHECK(child > 0, "child fork failed (pid %d)", child);
+    if (child <= 0) return;
+
+    CHECK(scheduler_block(parent) == 0, "block parent failed");
+    CHECK(processes[parent].state == PROC_BLOCKED, "parent not blocked");
+
+    scheduler_exit_process(child, 7);
+
+    CHECK(processes[parent].state == PROC_READY,
+          "parent state = %d, want READY", processes[parent].state);
+    CHECK(processes[child].ppid == parent,
+          "child ppid = %d, want %d", processes[child].ppid, parent);
+    CHECK(processes[child].exit_code == 7,
+          "child exit_code = %d, want 7", processes[child].exit_code);
+}
+
+static void test_reap_clears_ppid(void) {
+    printf("\n=== Test 7: scheduler_reap clears ppid ===\n");
+    reset_world();
+
+    int parent = -1;
+    int child = make_parent_with_child(&parent);
+    CHECK(child > 0, "child fork failed (pid %d)", child);
+    if (child <= 0) return;
+
+    CHECK(scheduler_kill(child) == 0, "kill child failed");
+    CHECK(processes[child].ppid == parent, "precondition: ppid = %d",
+          processes[child].ppid);
+    CHECK(scheduler_reap(child) == 0, "reap failed");
+
+    CHECK(processes[child].state == PROC_FREE,
+          "reaped state = %d, want FREE", processes[child].state);
+    CHECK(processes[child].ppid == 0,
+          "reaped ppid = %d, want 0", processes[child].ppid);
+}
+
+static void test_wait_child_policy(void) {
+    printf("\n=== Test 8: scheduler_wait_child collects/blocks/ECHILD ===\n");
+    reset_world();
+
+    int parent = make_user_parent();
+    CHECK(parent > 0, "user parent creation failed (pid %d)", parent);
+    if (parent <= 0) return;
+
+    int status = -99;
+    CHECK(scheduler_wait_child(parent, &status) == -1,
+          "no children must return ECHILD");
+    CHECK(status == -99, "status written with no children");
+
+    syscall_frame_t frame;
+    fill_frame(&frame);
+    int child = process_fork(parent, &frame);
+    CHECK(child > 0, "child fork failed (pid %d)", child);
+    if (child <= 0) return;
+
+    /* A live child means "block", not "no children". */
+    CHECK(scheduler_wait_child(parent, &status) == 0,
+          "live child must return 0 (block)");
+    CHECK(status == -99, "status written for a live child");
+
+    /* Its zombie is collected with status, reaped and given back to the PMM. */
+    uint64_t pages_before = fork_wait_stub_used_pages();
+    processes[child].exit_code = 55;
+    CHECK(scheduler_kill(child) == 0, "kill child failed");
+    int got = scheduler_wait_child(parent, &status);
+    CHECK(got == child, "wait returned %d, want child %d", got, child);
+    CHECK(status == 55, "status = %d, want 55", status);
+    CHECK(processes[child].state == PROC_FREE, "collected child not reaped");
+    CHECK(processes[child].ppid == 0, "collected child ppid not cleared");
+    CHECK(fork_wait_stub_used_pages() == pages_before - 4,
+          "collecting a child freed %llu frames, want 4",
+          (unsigned long long)(pages_before - fork_wait_stub_used_pages()));
+
+    /* No children left after collection. */
+    CHECK(scheduler_wait_child(parent, &status) == -1,
+          "ECHILD after all children reaped");
+
+    /* A NULL status pointer is allowed. */
+    int child2 = process_fork(parent, &frame);
+    CHECK(child2 > 0, "second child fork failed (pid %d)", child2);
+    if (child2 <= 0) return;
+    processes[child2].exit_code = 9;
+    CHECK(scheduler_kill(child2) == 0, "kill second child failed");
+    CHECK(scheduler_wait_child(parent, NULL) == child2,
+          "NULL status pointer was rejected");
+}
+
 int main(void) {
     printf("ARC OS fork/wait test (real kernel/scheduler.c)\n");
 
     test_fork_captures_trap_frame();
     test_fork_rejects_invalid_inputs();
     test_fork_out_of_slots();
+    test_parented_zombie_survives_idle_reaper();
+    test_exit_reparents_children();
+    test_child_exit_wakes_blocked_parent();
+    test_reap_clears_ppid();
+    test_wait_child_policy();
 
     printf("\n=== Results ===\n");
     printf("  passed: %d\n", tests_passed);

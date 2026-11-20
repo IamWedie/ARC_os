@@ -473,14 +473,47 @@ void scheduler_block_current(void) {
     if (scheduler_block(current_process) == 0) scheduler_yield();
 }
 
+/*
+ * Wake a parent sleeping in wait() when one of its children dies. PID 0 is the
+ * idle loop and can never block, so it is ignored here.
+ */
+static void scheduler_wake_parent_if_blocked(int ppid) {
+    if (ppid <= 0 || ppid >= MAX_PROCESSES) return;
+    if (processes[ppid].state == PROC_BLOCKED) scheduler_wake(ppid);
+}
+
+/*
+ * Exit bookkeeping, factored out of scheduler_exit_current so host tests can
+ * exercise it without the noreturn yield loop (`int $0x81` is not executable
+ * in a userspace test process). Ordering matters: children are adopted by PID
+ * 0 before the death is published, and the parent is woken only after its
+ * child is a zombie carrying a stable exit code.
+ */
+void scheduler_exit_process(int pid, int code) {
+    if (pid <= 0 || pid >= MAX_PROCESSES) return;
+    if (processes[pid].state == PROC_FREE ||
+        processes[pid].state == PROC_ZOMBIE) return;
+
+    int ppid = processes[pid].ppid;
+
+    /* Orphans are adopted by PID 0 so the idle reaper can reclaim them. */
+    for (int i = 1; i < MAX_PROCESSES; i++) {
+        if (i != pid && processes[i].ppid == pid)
+            processes[i].ppid = 0;
+    }
+
+    processes[pid].exit_code = code;
+    scheduler_kill(pid);
+    scheduler_wake_parent_if_blocked(ppid);
+}
+
 void scheduler_exit_current(int code) {
     int pid = current_process;
     if (pid == 0) {
         for (;;) __asm__ volatile("cli; hlt");
     }
 
-    processes[pid].exit_code = code;
-    scheduler_kill(pid);
+    scheduler_exit_process(pid, code);
 
     /* The zombie is never re-queued, so this normally never returns. */
     for (;;) scheduler_yield();
@@ -549,6 +582,7 @@ int scheduler_reap(int pid) {
     processes[pid].stack_base = 0;
     processes[pid].stack_size = 0;
     processes[pid].name[0] = '\0';
+    processes[pid].ppid = 0;
     state_set(pid, PROC_FREE);
 
     while (num_processes > 1 &&
@@ -560,9 +594,11 @@ int scheduler_reap(int pid) {
 
 /*
  * Idle-loop reaper.  Process 0 owns no user resources, so it can safely free
- * every zombie's kernel stack and owned frame runs.  The scan is atomic with
- * respect to scheduling: a timer tick that arrives here sees preempt_disabled
- * and returns without touching the half-reaped process table.
+ * unparented zombies' kernel stacks and owned frame runs.  A zombie that still
+ * has a parent (ppid != 0) belongs to that parent's wait() and is left alone.
+ * The scan is atomic with respect to scheduling: a timer tick that arrives
+ * here sees preempt_disabled and returns without touching the half-reaped
+ * process table.
  */
 int scheduler_reap_zombies(void) {
     if (current_process != 0) return -1;
@@ -571,12 +607,47 @@ int scheduler_reap_zombies(void) {
     preempt_disable();
     for (int pid = 1; pid < MAX_PROCESSES; pid++) {
         if (processes[pid].state == PROC_ZOMBIE &&
+            processes[pid].ppid == 0 &&
             scheduler_reap(pid) == 0) {
             reaped++;
         }
     }
     preempt_enable();
     return reaped;
+}
+
+/*
+ * Collect one zombie child of parent_pid. Returns the child's pid after
+ * reaping it (copying exit_code to status_out when non-NULL), 0 when the
+ * parent still has live children but nothing to collect yet, or -1 (ECHILD)
+ * when it has no children at all. The caller decides whether to block on 0.
+ */
+int scheduler_wait_child(int parent_pid, int* status_out) {
+    if (parent_pid <= 0 || parent_pid >= MAX_PROCESSES) return -1;
+
+    int zombie = -1;
+    int live_child = 0;
+
+    for (int i = 1; i < MAX_PROCESSES; i++) {
+        if (processes[i].ppid != parent_pid) continue;
+
+        int state = processes[i].state;
+        if (state == PROC_ZOMBIE) {
+            zombie = i;      /* lowest pid wins, deterministically */
+            break;
+        }
+        if (state == PROC_READY || state == PROC_RUNNING ||
+            state == PROC_BLOCKED) {
+            live_child = 1;
+        }
+    }
+
+    if (zombie < 0) return live_child ? 0 : -1;
+
+    int code = processes[zombie].exit_code;
+    if (scheduler_reap(zombie) != 0) return -1;
+    if (status_out) *status_out = code;
+    return zombie;
 }
 
 void scheduler_boost(void) {

@@ -290,13 +290,26 @@ int scheduler_wake(int pid);
 int scheduler_kill(int pid);
 int scheduler_reap(int pid);
 /*
- * Reap every zombie except the current process. Intended for the idle loop
- * (PID 0); returns the number reaped, or -1 if called from a non-idle process.
- * Preemption is disabled for the whole scan.
+ * Reap every unparented zombie (ppid == 0) except the current process. Zombies
+ * with a live parent are left for that parent's wait(). Intended for the idle
+ * loop (PID 0); returns the number reaped, or -1 if called from a non-idle
+ * process. Preemption is disabled for the whole scan.
  */
 int scheduler_reap_zombies(void);
+/*
+ * Collect a zombie child of parent_pid: returns its pid after reaping it and
+ * copying exit_code to status_out (when non-NULL), 0 if live children exist
+ * but none is collectable yet, or -1 (ECHILD) if there are no children.
+ */
+int scheduler_wait_child(int parent_pid, int* status_out);
 void scheduler_boost(void);
 void scheduler_block_current(void);
+/*
+ * Exit bookkeeping used by scheduler_exit_current: adopt orphaned children,
+ * publish exit_code, mark the zombie and wake a blocked parent. Exposed so
+ * host tests can exercise the policy without the noreturn yield loop.
+ */
+void scheduler_exit_process(int pid, int code);
 void scheduler_exit_current(int code) __attribute__((noreturn));
 int scheduler_check_invariants(void);
 int process_create(void (*entry)(void), const char* name);
