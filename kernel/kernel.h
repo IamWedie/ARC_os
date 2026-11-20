@@ -185,7 +185,9 @@ typedef struct {
 typedef struct {
     fd_entry_kind_t kind;
     int ofd;          /* index into the global OFD table, or -1 */
-    uint32_t flags;   /* per-fd flags; currently close-on-exec is reserved */
+    /* Reserved for future per-fd flags (e.g. close-on-exec). Always 0 today;
+     * open flags live on open_file_t.flags, never here. */
+    uint32_t flags;
 } fd_entry_t;
 
 typedef struct {
@@ -272,6 +274,10 @@ int fd_clone_process(const process_t* parent, process_t* child);
 int fd_open(int pid, const char* name, uint32_t flags);
 int fd_dup(int pid, int oldfd);
 int fd_close(int pid, int fd);
+/* Non-blocking query used by the syscall boundary to decide whether a read
+ * may sleep waiting for keyboard/serial input. No inline asm here: host tests
+ * link fd.c directly. */
+int fd_is_console_in(int pid, int fd);
 int fd_read(int pid, int fd, void* buf, size_t count);
 int fd_write(int pid, int fd, const void* buf, size_t count);
 int fd_seek(int pid, int fd, int64_t offset, int whence);
@@ -283,15 +289,17 @@ int fd_truncate(int pid, int fd);
 #define FS_MAX_FILES 32
 #define FS_MAX_FILENAME 32
 #define FS_MAX_FILESIZE 65536
-#define FS_SLOT_FIRST 3   /* fd>=3 are files; 0/1/2 are stdin/stdout/stderr */
-#define FS_CONSOLE_STDOUT 1   /* fd>=3 are files */
 
 typedef struct {
     char name[FS_MAX_FILENAME];
     uint32_t size;
     uint32_t start_block;   /* first 512-byte block of the extent */
     uint32_t blocks;        /* number of blocks in the extent */
-    uint32_t pos;           /* legacy fd-shaped read/write position */
+    /* Legacy fd-shaped read/write position. Persisted on disk as part of the
+     * version-2 directory record (on-disk layout compatibility); the fd layer
+     * now keeps the live position on open_file_t.offset, so this field is
+     * normalized to 0 on mount and write but must not be dropped. */
+    uint32_t pos;
     uint16_t open_refs;     /* open file descriptions referencing this slot */
     uint8_t deleted;        /* unlinked name; extent freed at last release */
     int used;               /* file exists (including deleted-but-open) */
@@ -307,6 +315,8 @@ int fs_rename(const char* oldname, const char* newname);
  * fs_file_t indices, not descriptor numbers.
  */
 int fs_open_slot(const char* name, int create);
+/* Resolve a visible (non-deleted) name to a slot; -1 when absent. */
+int fs_find_slot(const char* name);
 int fs_slot_read(int slot, uint32_t off, void* buf, size_t count);
 int fs_slot_write(int slot, uint32_t off, const void* buf, size_t count);
 int fs_slot_size(int slot);

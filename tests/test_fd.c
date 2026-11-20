@@ -53,6 +53,14 @@ static void test_std_fds(void) {
           "fd 2 kind = %d", processes[1].fds[FD_STDERR].kind);
     CHECK(processes[1].fds[FD_STDIN].ofd == -1,
           "console fd 0 points at OFD %d", processes[1].fds[FD_STDIN].ofd);
+    CHECK(fd_is_console_in(1, FD_STDIN) == 1,
+          "console fd 0 was not reported as console-in");
+    CHECK(fd_is_console_in(1, FD_STDOUT) == 0,
+          "console stdout was reported as console-in");
+    CHECK(fd_is_console_in(1, FD_STDERR) == 0,
+          "console stderr was reported as console-in");
+    CHECK(fd_is_console_in(1, FD_MAX - 1) == 0,
+          "free fd was reported as console-in");
     for (int fd = 3; fd < FD_MAX; fd++) {
         CHECK(processes[1].fds[fd].kind == FD_ENTRY_FREE,
               "fd %d should start free, kind = %d", fd,
@@ -192,6 +200,18 @@ static void test_close_std_fd_reuses_number(void) {
           "file read back '%c'", c);
 
     CHECK(fd_close(1, f) == 0, "close reused fd failed");
+
+    /* A closed fd 0 reused by a regular file must not look like console-in,
+       or SYS_READ would spin forever on an empty file at that descriptor. */
+    CHECK(fd_close(1, FD_STDIN) == 0, "close(stdin) failed");
+    int reused_stdin = fd_open(1, "reused-stdin.txt", O_RDONLY | O_CREAT);
+    CHECK(reused_stdin == FD_STDIN,
+          "open after closing stdin returned fd %d", reused_stdin);
+    CHECK(fd_is_console_in(1, FD_STDIN) == 0,
+          "file-backed fd 0 was reported as console-in");
+    if (reused_stdin >= 0)
+        CHECK(fd_close(1, reused_stdin) == 0, "close reused stdin failed");
+
     CHECK(fd_stub_total_refs() == 0, "slot refs after close = %d",
           fd_stub_total_refs());
     fd_close_all(&processes[1]);
@@ -375,6 +395,75 @@ static void test_pool_exhaustion(void) {
           fd_stub_total_refs());
 }
 
+/*
+ * Deferred item: prove O_APPEND recomputes EOF on every write. Seed a
+ * five-byte file, issue two appends through one fd, then repeat the same two
+ * writes through a normal fd and show they overwrite from offset 0 instead.
+ */
+static void test_append_two_writes(void) {
+    printf("\n=== Test 9: O_APPEND recomputes EOF on each write ===\n");
+    fd_stub_reset();
+    fd_init_process(&processes[1]);
+
+    int seed = fd_open(1, "append-twice", O_WRONLY | O_CREAT);
+    CHECK(seed >= 0, "seed open failed");
+    if (seed >= 0) {
+        CHECK(fd_write(1, seed, "01234", 5) == 5, "seed write failed");
+        CHECK(fd_close(1, seed) == 0, "seed close failed");
+    }
+
+    int app = fd_open(1, "append-twice", O_WRONLY | O_CREAT | O_APPEND);
+    CHECK(app >= 0, "O_APPEND open failed");
+    if (app >= 0) {
+        CHECK(fd_write(1, app, "AA", 2) == 2, "first append write failed");
+        CHECK(fd_write(1, app, "BB", 2) == 2, "second append write failed");
+        CHECK(fd_size(1, app) == 9,
+              "size after two appends = %d, expected 9", fd_size(1, app));
+        CHECK(fd_close(1, app) == 0, "append close failed");
+
+        int r = fd_open(1, "append-twice", O_RDONLY);
+        CHECK(r >= 0, "append read-back open failed");
+        if (r >= 0) {
+            char buf[16] = {0};
+            int got = fd_read(1, r, buf, 9);
+            CHECK(got == 9, "append read-back returned %d bytes", got);
+            CHECK(memcmp(buf, "01234AABB", 9) == 0,
+                  "appended contents = \"%.9s\", expected \"01234AABB\"", buf);
+            CHECK(fd_close(1, r) == 0, "append read-back close failed");
+        }
+    }
+
+    /* Same two writes without O_APPEND: offset-based, so no append. */
+    int plain = fd_open(1, "append-twice", O_WRONLY | O_CREAT);
+    CHECK(plain >= 0, "non-append open failed");
+    if (plain >= 0) {
+        CHECK(fd_write(1, plain, "XX", 2) == 2,
+              "non-append first write failed");
+        CHECK(fd_write(1, plain, "YY", 2) == 2,
+              "non-append second write failed");
+        CHECK(fd_size(1, plain) == 9,
+              "size after non-append writes = %d, expected 9",
+              fd_size(1, plain));
+        CHECK(fd_close(1, plain) == 0, "non-append close failed");
+
+        int r = fd_open(1, "append-twice", O_RDONLY);
+        CHECK(r >= 0, "non-append read-back open failed");
+        if (r >= 0) {
+            char buf[16] = {0};
+            int got = fd_read(1, r, buf, 9);
+            CHECK(got == 9, "non-append read-back returned %d bytes", got);
+            CHECK(memcmp(buf, "XXYY4AABB", 9) == 0,
+                  "non-append contents = \"%.9s\", expected \"XXYY4AABB\"",
+                  buf);
+            CHECK(fd_close(1, r) == 0, "non-append read-back close failed");
+        }
+    }
+
+    fd_close_all(&processes[1]);
+    CHECK(fd_stub_total_refs() == 0, "slot refs after append test = %d",
+          fd_stub_total_refs());
+}
+
 int main(void) {
     printf("ARC OS file descriptor tests\n");
     test_std_fds();
@@ -385,6 +474,7 @@ int main(void) {
     test_seek_bounds();
     test_clone_process();
     test_pool_exhaustion();
+    test_append_two_writes();
 
     printf("\n=== fd suite: %d checks, %d failures ===\n",
            tests_passed, tests_failed);

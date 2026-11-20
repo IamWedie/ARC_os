@@ -103,15 +103,9 @@ static int fs_name_copy(fs_file_t* f, const char* name) {
 }
 
 static void fs_slot_clear(int slot) {
-    fs_file_t* f = &fs_files[slot];
-    f->used = 0;
-    f->name[0] = '\0';
-    f->size = 0;
-    f->start_block = 0;
-    f->blocks = 0;
-    f->pos = 0;
-    f->open_refs = 0;
-    f->deleted = 0;
+    /* Whole-record zeroing also clears struct padding that is persisted by
+     * fs_persist_dir(); field-by-field clearing leaked stale bytes to disk. */
+    memset(&fs_files[slot], 0, sizeof(fs_files[slot]));
 }
 
 /* Release the storage of an unlinked slot and mark it reusable. */
@@ -127,6 +121,9 @@ static int fs_disk_fs_local_ok = 0;
 
 static int fs_persist_dir(void) {
     if (!fs_disk || !fs_disk_fs_local_ok) return 0;
+    /* The directory occupies whole sectors but the record array may be
+     * shorter: zero the scratch first so trailing bytes are deterministic. */
+    memset(fs_dir_scratch, 0, FS_DIR_SECTORS * FS_SECTOR_SIZE);
     memcpy(fs_dir_scratch, fs_files, sizeof(fs_file_t) * FS_MAX_FILES);
     return ata_write_sectors(FS_DISK_DIR_LBA, FS_DIR_SECTORS, fs_dir_scratch);
 }
@@ -141,16 +138,8 @@ static int fs_persist_file(fs_file_t* f) {
 }
 
 static void fs_format(void) {
-    for (int i = 0; i < FS_MAX_FILES; i++) {
-        fs_files[i].used = 0;
-        fs_files[i].name[0] = '\0';
-        fs_files[i].size = 0;
-        fs_files[i].start_block = 0;
-        fs_files[i].blocks = 0;
-        fs_files[i].pos = 0;
-        fs_files[i].open_refs = 0;
-        fs_files[i].deleted = 0;
-    }
+    /* Zero the full table, including padding, before persisting it. */
+    memset(fs_files, 0, sizeof(fs_file_t) * FS_MAX_FILES);
     if (fs_disk) {
         /* Sector I/O always operates on full 512-byte units: never hand the
          * (packed, 24-byte) superblock struct to ata_* directly or the
@@ -450,6 +439,8 @@ int fs_slot_truncate(int slot) {
 int fs_slot_add_ref(int slot) {
     if (slot < 0 || slot >= FS_MAX_FILES || !fs_files[slot].used) return -1;
     fs_file_t* f = &fs_files[slot];
+    /* Deleted-but-open slots are on their way out: no new OFD may claim one. */
+    if (f->deleted) return -1;
     if (f->open_refs == UINT16_MAX) return -1;
     f->open_refs++;
     return 0;

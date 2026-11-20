@@ -31,6 +31,11 @@ static fd_entry_t* fd_lookup(int pid, int fd) {
     return &processes[pid].fds[fd];
 }
 
+int fd_is_console_in(int pid, int fd) {
+    fd_entry_t* entry = fd_lookup(pid, fd);
+    return entry && entry->kind == FD_ENTRY_CONSOLE_IN;
+}
+
 static open_file_t* fd_entry_ofd(const fd_entry_t* entry) {
     if (entry->kind != FD_ENTRY_FILE) return NULL;
     if (entry->ofd < 0 || entry->ofd >= OFD_MAX) return NULL;
@@ -156,11 +161,9 @@ void fd_close_all(process_t* p) {
 int fd_clone_process(const process_t* parent, process_t* child) {
     if (!parent || !child) return -1;
 
-    for (int fd = 0; fd < FD_MAX; fd++) {
-        child->fds[fd].kind = FD_ENTRY_FREE;
-        child->fds[fd].ofd = -1;
-        child->fds[fd].flags = 0;
-    }
+    /* A recycled child may still own OFDs; release those references instead
+     * of overwriting the table and leaking them. */
+    fd_close_all(child);
 
     for (int fd = 0; fd < FD_MAX; fd++) {
         const fd_entry_t* src = &parent->fds[fd];

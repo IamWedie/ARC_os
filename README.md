@@ -253,8 +253,8 @@ Intermediate objects live in `%TEMP%\opencode\arc_build`.
 
 | File | Description | Approx. size |
 |------|-------------|--------------|
-| `os.elf` | ELF32 multiboot boot image with embedded ELF64 kernel | ~68 KB |
-| `<build>\kernel.bin` | Raw kernel blob embedded at physical `0x200000` | ~46 KB |
+| `os.elf` | ELF32 multiboot boot image with embedded ELF64 kernel | ~70 KB (71,156 bytes) |
+| `<build>\kernel.bin` | Raw kernel blob embedded at physical `0x200000` | ~48 KB (48,592 bytes) |
 | `<build>\user_shell.bin` | Raw ring-3 shell blob | ~7 KB |
 
 ---
@@ -394,6 +394,11 @@ tables for the user mappings above.
 
 > **Note:** `echo text to file` now **overwrites (truncates)** the target file
 > instead of appending. Writing `beta` over `alpha` leaves exactly `beta`.
+>
+> **Note:** `cat` prints the file bytes verbatim, then emits one trailing
+> newline if the file does not already end in `\n`, so its output never runs
+> into the next `arc> ` prompt. The newline is display-only; the file is not
+> modified.
 
 ---
 
@@ -451,8 +456,9 @@ returns to level 0 to bound starvation. PID 0 is a special idle process that is
 never queued and runs only when no real process is ready.
 
 **Q: What is the file size?**
-A: The kernel ELF is about 204 KB including debug sections; the raw kernel
-blob embedded in the boot image is about 46 KB. `os.elf` is about 68 KB.
+A: The kernel ELF is about 220 KB including debug sections (224,744 bytes); the
+raw kernel blob embedded in the boot image is about 48 KB (48,592 bytes).
+`os.elf` is about 70 KB (71,156 bytes).
 
 **Q: Why does the boot test use TCP instead of stdio?**
 A: QEMU's Windows stdio backend drops input bytes when the emulated UART

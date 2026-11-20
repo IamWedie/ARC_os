@@ -307,12 +307,13 @@ Implemented on branch `posix-fd-layer` after human approval of this design. The
 final slice was verified with the full quality gate
 `cmd /c tests\run_all.bat`:
 
-- Host suites: slab/memory 2269 checks, scheduler 343 checks, POSIX fd 164
-  checks, filesystem slot 37 checks — all with 0 failures.
+- Host suites: slab/memory 2269 checks, scheduler 343 checks, POSIX fd 194
+  checks, filesystem slot 38 checks — all with 0 failures.
 - Full kernel build and link OK; `NO-SSE` codegen guard OK.
 - TCP-serial QEMU shell: `cat fdtest.txt` prints `beta`, with both
   `--expect-not alphabeta` and `--expect-not betaa` enforced in the boot gate;
-  `BOOT OK: 1675 bytes`.
+  `BOOT OK: 1,677 bytes` (1,676–1,677 across runs; one prompt byte varies with
+  settle timing).
 
 Refcount contract as implemented (binding): `fs_open_slot()` acquires no slot
 reference; `fd_open()` adds exactly one slot reference per open file
@@ -328,12 +329,15 @@ or `betaa`.
 
 ## Known limitations
 
-Deferred minor items are tracked in the SDD ledger
-(`.superpowers/sdd/2026-11-20-posix-fd-layer/progress.md`); they are **not**
-fixed by this slice. They include: no dedicated two-write `O_APPEND` host test;
-`fd_clone_process()` assumes a fresh child fd table; `fs_format()` writes struct
-padding to disk; `fs_find_slot()` is not declared in `kernel/kernel.h`;
-`fs_slot_add_ref()` does not reject deleted slots. Seeking past EOF remains
+The deferred minor items formerly tracked in the SDD ledger
+(`.superpowers/sdd/2026-11-20-posix-fd-layer/progress.md`) were fixed by the
+final fix wave; see
+`.superpowers/sdd/2026-11-20-posix-fd-layer/final-fix-report.md`. That wave
+added the two-write `O_APPEND` test, released refs from a recycled child fd
+table, zeroed directory padding/scratch before write-through, declared
+`fs_find_slot()` in `kernel/kernel.h`, rejected deleted slots in
+`fs_slot_add_ref()`, restored blocking console stdin at the syscall boundary,
+and documented `cat`'s display-only trailing newline. Seeking past EOF remains
 rejected because the allocator has no sparse-file support.
 
 ## Approval

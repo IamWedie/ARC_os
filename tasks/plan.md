@@ -100,7 +100,7 @@ PMM (physical frames)
 | **COM1 receive path** | ✅ IRQ4 → vector 36, level-triggered IOAPIC route, 64-byte software ring, 14-byte FIFO trigger + receive-timeout for short lines | runtime `help`, `clear`, `touch runtime.txt`, `ls`, `exit` all complete correctly |
 | **Boot + interactive ring-3 runtime** | ✅ Long mode, memory, ACPI/LAPIC/IOAPIC, heap self-test, ring-3 shell, serial input | `tools/boot_test.py`: `arc> ` prompt, command output, `BOOT OK` |
 | **SSE-free codegen** | ✅ Kernel/user code builds with `-mno-sse -mno-sse2 -mno-mmx -mno-avx`; build rejects vector instructions | build-time `objdump` guard (`NO-SSE`) |
-| **Per-process POSIX fd layer** | ✅ Per-process fd tables over shared open file descriptions, `dup`, deferred unlink, access/seek checks; `echo text to file` now overwrites (truncates) | 164 fd + 37 fs host checks; full gate green; QEMU `cat fdtest.txt` → `beta` |
+| **Per-process POSIX fd layer** | ✅ Per-process fd tables over shared open file descriptions, `dup`, deferred unlink, access/seek checks; `echo text to file` now overwrites (truncates) | 194 fd + 38 fs host checks; full gate green; QEMU `cat fdtest.txt` → `beta` |
 
 ### ❌ Still Missing
 
@@ -130,14 +130,14 @@ PMM (physical frames)
 |------|--------|--------|
 | Slab/memory host stress | ✅ 2269 checks, 0 failures | `cmd /c tests\run_tests.bat` |
 | Scheduler host tests | ✅ 343 checks, 0 failures (includes idle reaper) | `cmd /c tests\run_tests.bat` |
-| POSIX fd host tests | ✅ 164 checks, 0 failures | `cmd /c tests\run_tests.bat` |
-| Filesystem slot host tests | ✅ 37 checks, 0 failures | `cmd /c tests\run_tests.bat` |
-| POSIX fd boot gate | ✅ QEMU `cat fdtest.txt` → `beta`; `--expect-not alphabeta` and `--expect-not betaa`; `BOOT OK: 1675 bytes` | `cmd /c tests\run_all.bat` |
+| POSIX fd host tests | ✅ 194 checks, 0 failures (includes two-write `O_APPEND`) | `cmd /c tests\run_tests.bat` |
+| Filesystem slot host tests | ✅ 38 checks, 0 failures | `cmd /c tests\run_tests.bat` |
+| POSIX fd boot gate | ✅ QEMU `cat fdtest.txt` → `beta`; `--expect-not alphabeta` and `--expect-not betaa`; `BOOT OK: 1,677 bytes` (1,676–1,677 across runs; one prompt byte varies with settle timing) | `cmd /c tests\run_all.bat` |
 | Test sensitivity (mutation) | ✅ 3 failures injected, 3 detected | mutated double-free check |
-| Full kernel build/link | ✅ 201,976-byte kernel ELF, 44,384-byte raw kernel | `python tools\build_kernel.py --quiet` |
-| Boot image | ✅ 66,868-byte `os.elf`, multiboot OK, kernel bytes verified at 0x200000 | build-script validation |
+| Full kernel build/link | ✅ 224,744-byte kernel ELF, 48,592-byte raw kernel | `python tools\build_kernel.py --quiet` |
+| Boot image | ✅ 71,156-byte `os.elf`, multiboot OK, kernel bytes verified at 0x200000 | build-script validation |
 | No vector instructions | ✅ `NO-SSE` build check passes | `objdump` scan in build script |
-| QEMU interactive shell | ✅ `help`, `clear`, `touch runtime.txt`, `ls`, `exit`; 1,528 bytes of serial output | `python tools\boot_test.py ...` over TCP serial |
+| QEMU interactive shell (baseline) | ✅ `help`, `clear`, `touch runtime.txt`, `ls`, `exit`; 1,528 bytes at baseline `d465782` (current gate: 1,677 bytes, see POSIX fd row) | `python tools\boot_test.py ...` over TCP serial |
 | Boot race regression | ✅ 5/5 additional boots `BOOT OK` after the loader fix | repeated `python tools\boot_test.py` runs |
 | Combined quality gate | ✅ host tests → build → interactive boot test all pass | `cmd /c tests\run_all.bat` |
 
@@ -228,10 +228,10 @@ file defers freeing its blocks until the last descriptor closes.
 
 #### Checkpoint: POSIX Descriptor Layer Complete
 
-- [x] Host suites green: 2269 + 343 + 164 + 37 checks, 0 failures
+- [x] Host suites green: 2269 + 343 + 194 + 38 checks, 0 failures
 - [x] Full build and `NO-SSE` build guard pass
 - [x] `cmd /c tests\run_all.bat` passes: QEMU `cat fdtest.txt` → `beta` with
-      `--expect-not alphabeta` and `--expect-not betaa`; `BOOT OK: 1675 bytes`
+      `--expect-not alphabeta` and `--expect-not betaa`; `BOOT OK: 1,677 bytes`
 
 #### Behaviour change
 

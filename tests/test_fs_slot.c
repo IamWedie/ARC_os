@@ -16,8 +16,7 @@
 #undef SYS_OPEN /* MinGW stdio uses this name for _SYS_OPEN */
 #include "kernel.h"
 
-/* Internal helper exported by kernel/fs.c for this host suite. */
-int fs_find_slot(const char* name);
+/* fs_find_slot() is declared in kernel/kernel.h alongside the slot API. */
 
 extern void fs_stub_disk_reset(int present);
 extern void fs_stub_disk_write_bytes(uint32_t lba, const void* data, size_t len);
@@ -105,6 +104,8 @@ static void test_slot_refcount_and_deferred_unlink(void) {
     CHECK(fs_delete("victim") == 0, "delete of open victim failed");
     CHECK(fs_find_slot("victim") == -1,
           "deleted-but-open victim still resolves by name");
+    CHECK(fs_slot_add_ref(slot) == -1,
+          "add_ref on a deleted-but-open slot was accepted");
 
     char buf[64] = {0};
     int got = fs_slot_read(slot, 0, buf, len);
