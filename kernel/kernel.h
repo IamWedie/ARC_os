@@ -291,8 +291,10 @@ typedef struct {
     uint32_t size;
     uint32_t start_block;   /* first 512-byte block of the extent */
     uint32_t blocks;        /* number of blocks in the extent */
-    uint32_t pos;           /* current read/write position */
-    int used;               /* file exists */
+    uint32_t pos;           /* legacy fd-shaped read/write position */
+    uint16_t open_refs;     /* open file descriptions referencing this slot */
+    uint8_t deleted;        /* unlinked name; extent freed at last release */
+    int used;               /* file exists (including deleted-but-open) */
 } fs_file_t;
 
 void fs_init(void);

@@ -14,6 +14,17 @@
  */
 #include "kernel.h"
 
+/*
+ * The return-address integrity check below relies on the kernel's frame
+ * pointer and privileged instructions. Hosted builds link this file into the
+ * native test suite, where that check is meaningless.
+ */
+#if defined(__STDC_HOSTED__) && (__STDC_HOSTED__ == 1)
+#define FS_HOSTED_BUILD 1
+#else
+#define FS_HOSTED_BUILD 0
+#endif
+
 #define FS_BLOCK_SIZE 512
 #define FS_ARENA_BYTES (512 * 1024)
 #define FS_NUM_BLOCKS (FS_ARENA_BYTES / FS_BLOCK_SIZE)   /* 1024 */
@@ -24,7 +35,7 @@
 #define FS_DISK_DIR_LBA  1                        /* fs_files[] table (raw) */
 #define FS_DIR_SECTORS   ((sizeof(fs_file_t) * FS_MAX_FILES + 511) / 512)
 #define FS_DISK_DATA_LBA (FS_DISK_DIR_LBA + FS_DIR_SECTORS)
-#define FS_DISK_VERSION  1
+#define FS_DISK_VERSION  2
 
 typedef struct __attribute__((packed)) {
     char magic[8];
@@ -65,9 +76,14 @@ static void fs_free_extent(int s, int n) {
     for (int j = 0; j < n; j++) fs_bmap_set(s + j, 0);
 }
 
-static int fs_find_slot(const char* name) {
+/*
+ * Resolve a visible file name. Deleted-but-open slots keep their name for
+ * diagnostics but must never resolve again; host tests call this directly.
+ */
+int fs_find_slot(const char* name) {
+    if (!name) return -1;
     for (int i = 0; i < FS_MAX_FILES; i++) {
-        if (!fs_files[i].used) continue;
+        if (!fs_files[i].used || fs_files[i].deleted) continue;
         int k = 0;
         while (name[k] && fs_files[i].name[k] &&
                name[k] == fs_files[i].name[k]) k++;
@@ -84,6 +100,25 @@ static int fs_name_copy(fs_file_t* f, const char* name) {
     }
     f->name[k] = '\0';
     return 0;
+}
+
+static void fs_slot_clear(int slot) {
+    fs_file_t* f = &fs_files[slot];
+    f->used = 0;
+    f->name[0] = '\0';
+    f->size = 0;
+    f->start_block = 0;
+    f->blocks = 0;
+    f->pos = 0;
+    f->open_refs = 0;
+    f->deleted = 0;
+}
+
+/* Release the storage of an unlinked slot and mark it reusable. */
+static void fs_reclaim_deleted(int slot) {
+    fs_file_t* f = &fs_files[slot];
+    if (f->blocks > 0) fs_free_extent((int)f->start_block, (int)f->blocks);
+    fs_slot_clear(slot);
 }
 
 static int fs_disk_fs_local_ok = 0;
@@ -113,6 +148,8 @@ static void fs_format(void) {
         fs_files[i].start_block = 0;
         fs_files[i].blocks = 0;
         fs_files[i].pos = 0;
+        fs_files[i].open_refs = 0;
+        fs_files[i].deleted = 0;
     }
     if (fs_disk) {
         /* Sector I/O always operates on full 512-byte units: never hand the
@@ -132,6 +169,7 @@ static void fs_format(void) {
     }
 }
 
+#if !FS_HOSTED_BUILD
 static __attribute__((always_inline)) inline void fs_check_ret(uint64_t saved) {
     uint64_t now;
     __asm__ volatile("movq 8(%%rbp), %0" : "=r"(now));
@@ -144,10 +182,13 @@ static __attribute__((always_inline)) inline void fs_check_ret(uint64_t saved) {
         for(;;) __asm__ volatile("cli; hlt");
     }
 }
+#endif
 
 void fs_init(void) {
+#if !FS_HOSTED_BUILD
     uint64_t fs_ret_saved;
     __asm__ volatile("movq 8(%%rbp), %0" : "=r"(fs_ret_saved));
+#endif
     fs_files = kmalloc(sizeof(fs_file_t) * FS_MAX_FILES);
     fs_bitmap = kmalloc(FS_BITMAP_BYTES);
     memset(fs_bitmap, 0, FS_BITMAP_BYTES);
@@ -183,12 +224,22 @@ void fs_init(void) {
             }
         }
         if (ok) {
-            /* Rebuild the block bitmap from the loaded file table. */
+            /* Rebuild the block bitmap from the loaded file table. open_refs
+             * and deleted are transient: a reboot cannot preserve open file
+             * descriptions, so stale deleted entries are reclaimed now. */
             int used = 0;
             for (int i = 0; i < FS_MAX_FILES; i++) {
-                if (!fs_files[i].used) continue;
-                used++;
                 fs_files[i].pos = 0;
+                fs_files[i].open_refs = 0;
+                if (!fs_files[i].used) {
+                    fs_files[i].deleted = 0;
+                    continue;
+                }
+                if (fs_files[i].deleted) {
+                    fs_reclaim_deleted(i);
+                    continue;
+                }
+                used++;
                 for (uint32_t j = 0; j < fs_files[i].blocks; j++)
                     fs_bmap_set((int)fs_files[i].start_block + (int)j, 1);
             }
@@ -214,13 +265,18 @@ void fs_init(void) {
         while (text[len]) len++;
         int fd = fs_open("welcome.txt", 1);
         fs_write(fd, text, len);
+        fs_close(fd);
     }
 
     fs_disk_fs_local_ok = 1;
+#if !FS_HOSTED_BUILD
     fs_check_ret(fs_ret_saved);
+#endif
     terminal_putstring("FS: ret-ok pre-selftest\n");
     fs_selftest();
+#if !FS_HOSTED_BUILD
     fs_check_ret(fs_ret_saved);
+#endif
     terminal_putstring("FS: ret-ok post-selftest\n");
 }
 
@@ -273,54 +329,63 @@ static void fs_selftest(void) {
             return;
         }
     }
+    if (fs_close(fd) != 0) { terminal_putstring("FS selftest: big close2 FAIL\n"); return; }
     if (fs_delete("big.tmp") != 0) { terminal_putstring("FS selftest: big delete FAIL\n"); return; }
 
     terminal_putstring("FS selftest: PASS\n");
 }
 
-int fs_open(const char* name, int create) {
+/* --- slot-level API used by kernel/fd.c --- */
+
+/*
+ * Resolve or create `name` and return its fs_file_t slot index (not a
+ * descriptor). Creating does NOT acquire a reference: the caller owns the new
+ * open file description and calls fs_slot_add_ref() exactly once for it.
+ */
+int fs_open_slot(const char* name, int create) {
+    if (!name || name[0] == '\0') return -1;
+
     int slot = fs_find_slot(name);
-    if (slot >= 0) {
-        fs_files[slot].pos = 0;
-        return FS_SLOT_FIRST + slot;
-    }
+    if (slot >= 0) return slot;
     if (!create) return -1;
+
     for (int i = 0; i < FS_MAX_FILES; i++) {
-        if (!fs_files[i].used) {
-            fs_files[i].used = 1;
-            fs_files[i].size = 0;
-            fs_files[i].blocks = 0;
-            fs_files[i].start_block = 0;
-            fs_files[i].pos = 0;
-            fs_name_copy(&fs_files[i], name);
-            fs_persist_dir();
-            return FS_SLOT_FIRST + i;
-        }
+        if (fs_files[i].used) continue;
+        fs_slot_clear(i);
+        fs_files[i].used = 1;
+        fs_name_copy(&fs_files[i], name);
+        fs_persist_dir();
+        return i;
     }
     return -1;
 }
 
-int fs_read(int fd, void* buf, size_t count) {
-    int slot = fd - FS_SLOT_FIRST;
-    if (slot < 0 || slot >= FS_MAX_FILES || !fs_files[slot].used) return -1;
+int fs_slot_read(int slot, uint32_t off, void* buf, size_t count) {
+    if (slot < 0 || slot >= FS_MAX_FILES) return -1;
     fs_file_t* f = &fs_files[slot];
-    uint32_t avail = f->size - f->pos;
-    size_t n = count;
-    if ((uint32_t)n > avail) n = avail;
-    memcpy(buf, fs_arena + (uintptr_t)f->start_block * FS_BLOCK_SIZE + f->pos, n);
-    f->pos += (uint32_t)n;
+    if (!f->used) return -1;
+    if (!buf && count > 0) return -1;
+    if (count == 0 || off >= f->size) return 0;
+
+    size_t avail = f->size - off;
+    size_t n = count < avail ? count : avail;
+    memcpy(buf, fs_arena + (uintptr_t)f->start_block * FS_BLOCK_SIZE + off, n);
     return (int)n;
 }
 
-int fs_write(int fd, const void* buf, size_t count) {
-    int slot = fd - FS_SLOT_FIRST;
-    if (slot < 0 || slot >= FS_MAX_FILES || !fs_files[slot].used) return -1;
-    if (count > FS_MAX_FILESIZE) return -1;
+int fs_slot_write(int slot, uint32_t off, const void* buf, size_t count) {
+    if (slot < 0 || slot >= FS_MAX_FILES) return -1;
     fs_file_t* f = &fs_files[slot];
+    if (!f->used) return -1;
+    if (!buf && count > 0) return -1;
+    if (count == 0) return 0;
+    if (count > FS_MAX_FILESIZE) return -1;
+    if (off > f->size) return -1;
 
-    uint32_t need = f->size + (uint32_t)count;
-    uint32_t need_blocks = (need + FS_BLOCK_SIZE - 1) / FS_BLOCK_SIZE;
+    uint32_t end = off + (uint32_t)count;
+    if (end > FS_MAX_FILESIZE) return -1;
 
+    uint32_t need_blocks = (end + FS_BLOCK_SIZE - 1) / FS_BLOCK_SIZE;
     if (need_blocks > f->blocks) {
         int nb = fs_alloc_extent((int)need_blocks);
         if (nb < 0) return -1;
@@ -332,16 +397,80 @@ int fs_write(int fd, const void* buf, size_t count) {
         f->blocks = need_blocks;
     }
 
-    memcpy(fs_arena + (uintptr_t)f->start_block * FS_BLOCK_SIZE + f->size, buf, count);
-    f->size = need;
+    memcpy(fs_arena + (uintptr_t)f->start_block * FS_BLOCK_SIZE + off, buf, count);
+    if (end > f->size) f->size = end;
     fs_persist_file(f);
     fs_persist_dir();
     return (int)count;
 }
 
+int fs_slot_size(int slot) {
+    if (slot < 0 || slot >= FS_MAX_FILES || !fs_files[slot].used) return -1;
+    return (int)fs_files[slot].size;
+}
+
+int fs_slot_truncate(int slot) {
+    if (slot < 0 || slot >= FS_MAX_FILES || !fs_files[slot].used) return -1;
+    fs_file_t* f = &fs_files[slot];
+    if (f->blocks > 0) fs_free_extent((int)f->start_block, (int)f->blocks);
+    f->size = 0;
+    f->blocks = 0;
+    f->start_block = 0;
+    f->pos = 0;
+    fs_persist_dir();
+    return 0;
+}
+
+int fs_slot_add_ref(int slot) {
+    if (slot < 0 || slot >= FS_MAX_FILES || !fs_files[slot].used) return -1;
+    fs_file_t* f = &fs_files[slot];
+    if (f->open_refs == UINT16_MAX) return -1;
+    f->open_refs++;
+    return 0;
+}
+
+void fs_slot_release(int slot) {
+    if (slot < 0 || slot >= FS_MAX_FILES) return;
+    fs_file_t* f = &fs_files[slot];
+    if (!f->used || f->open_refs == 0) return;
+
+    f->open_refs--;
+    if (f->open_refs == 0 && f->deleted) {
+        fs_reclaim_deleted(slot);
+        fs_persist_dir();
+    }
+}
+
+/* --- legacy fd-shaped wrappers (removed once syscalls use fd.c) --- */
+
+int fs_open(const char* name, int create) {
+    int slot = fs_open_slot(name, create);
+    if (slot < 0) return -1;
+    if (fs_slot_add_ref(slot) < 0) return -1;
+    fs_files[slot].pos = 0;
+    return FS_SLOT_FIRST + slot;
+}
+
+int fs_read(int fd, void* buf, size_t count) {
+    int slot = fd - FS_SLOT_FIRST;
+    if (slot < 0 || slot >= FS_MAX_FILES || !fs_files[slot].used) return -1;
+    int n = fs_slot_read(slot, fs_files[slot].pos, buf, count);
+    if (n > 0) fs_files[slot].pos += (uint32_t)n;
+    return n;
+}
+
+int fs_write(int fd, const void* buf, size_t count) {
+    int slot = fd - FS_SLOT_FIRST;
+    if (slot < 0 || slot >= FS_MAX_FILES || !fs_files[slot].used) return -1;
+    int n = fs_slot_write(slot, fs_files[slot].pos, buf, count);
+    if (n > 0) fs_files[slot].pos += (uint32_t)n;
+    return n;
+}
+
 int fs_close(int fd) {
     int slot = fd - FS_SLOT_FIRST;
     if (slot < 0 || slot >= FS_MAX_FILES) return -1;
+    fs_slot_release(slot);
     fs_files[slot].pos = 0;
     return 0;
 }
@@ -358,33 +487,23 @@ int fs_delete(const char* name) {
     int slot = fs_find_slot(name);
     if (slot < 0) return -1;
     fs_file_t* f = &fs_files[slot];
-    if (f->blocks > 0) fs_free_extent((int)f->start_block, (int)f->blocks);
-    f->used = 0;
-    f->name[0] = '\0';
-    f->size = 0;
-    f->blocks = 0;
-    f->start_block = 0;
-    f->pos = 0;
+    f->deleted = 1;
+    if (f->open_refs == 0) fs_reclaim_deleted(slot);
     fs_persist_dir();
     return 0;
 }
 
 int fs_file_size(int fd) {
     int slot = fd - FS_SLOT_FIRST;
-    if (slot < 0 || slot >= FS_MAX_FILES || !fs_files[slot].used) return -1;
-    return (int)fs_files[slot].size;
+    if (slot < 0 || slot >= FS_MAX_FILES) return -1;
+    return fs_slot_size(slot);
 }
 
 int fs_truncate(int fd) {
     int slot = fd - FS_SLOT_FIRST;
-    if (slot < 0 || slot >= FS_MAX_FILES || !fs_files[slot].used) return -1;
-    fs_file_t* f = &fs_files[slot];
-    if (f->blocks > 0) fs_free_extent((int)f->start_block, (int)f->blocks);
-    f->size = 0;
-    f->blocks = 0;
-    f->start_block = 0;
-    f->pos = 0;
-    fs_persist_dir();
+    if (slot < 0 || slot >= FS_MAX_FILES) return -1;
+    if (fs_slot_truncate(slot) < 0) return -1;
+    fs_files[slot].pos = 0;
     return 0;
 }
 
@@ -403,7 +522,7 @@ int fs_rename(const char* oldname, const char* newname) {
 int fs_list(void) {
     terminal_putstring("Files:\n");
     for (int i = 0; i < FS_MAX_FILES; i++) {
-        if (!fs_files[i].used) continue;
+        if (!fs_files[i].used || fs_files[i].deleted) continue;
         terminal_putstring("  ");
         terminal_putstring(fs_files[i].name);
         terminal_putstring("  (");
