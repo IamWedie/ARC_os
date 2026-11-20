@@ -3,7 +3,8 @@
 ARC OS boot smoke test.
 
 Boots os.elf in QEMU, captures the serial console over a TCP chardev, waits
-for expected markers, and fails on a panic/fault instead of hanging forever.
+for expected markers, and fails on a panic/fault, a missing marker, or a
+forbidden marker instead of hanging forever.
 This is the runtime quality gate that complements the host slab tests and the
 build-time image checks.
 
@@ -18,6 +19,7 @@ use `-serial stdio`; human typing is slow enough not to hit the drop path.
 Usage:
     python tools/boot_test.py
     python tools/boot_test.py --timeout 20 --expect "arc> "
+    python tools/boot_test.py --expect "beta" --expect-not "alphabeta"
 """
 import argparse
 import os
@@ -65,6 +67,10 @@ def main():
                         help="seconds before the boot is declared hung")
     parser.add_argument("--expect", action="append", default=[],
                         help="additional serial marker that must appear")
+    parser.add_argument("--expect-not", action="append", default=[],
+                        metavar="TEXT",
+                        help="text that must not appear anywhere in the serial "
+                             "output (repeatable)")
     parser.add_argument("--input", action="append", default=[],
                         help="line sent to the guest once the shell prompt "
                              "appears (repeatable)")
@@ -108,7 +114,7 @@ def main():
     # `wait=on` holds the VM until this connection arrives, so no boot output
     # is emitted before the reader is attached.
     sock = None
-    connect_deadline = time.time() + 10.0
+    connect_deadline = time.time() + 20.0
     while time.time() < connect_deadline:
         try:
             sock = socket.create_connection(("127.0.0.1", port), timeout=0.5)
@@ -199,8 +205,13 @@ def main():
     print("--- end serial console ---")
 
     missing = [m for m in markers if m not in text]
+    forbidden = [m for m in args.expect_not if m in text]
     if fatal:
         print("BOOT FAILED: fatal marker %r" % fatal, file=sys.stderr)
+        return 1
+    if forbidden:
+        print("BOOT FAILED: forbidden marker(s) present: %s"
+              % ", ".join(map(repr, forbidden)), file=sys.stderr)
         return 1
     if missing:
         print("BOOT FAILED: missing markers: %s"
