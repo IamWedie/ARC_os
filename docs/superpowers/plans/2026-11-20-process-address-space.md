@@ -212,7 +212,7 @@ git commit -m "refactor: route master VMM through page-table core and add CR3 sw
 
 **Files:**
 - Create: `kernel/address_space.c`, `tests/test_address_space.c`
-- Modify: `tests/run_tests.bat`
+- Modify: `kernel/kernel.h`, `tests/run_tests.bat`
 
 **Interfaces:**
 - Consumes: `pt_map`, `pt_clone_shared`, `pt_free_user_tables`, `pt_count_user_pages`, `vmm_master_root`, `vmm_invalidate_page`, `processes[]`, `pmm_alloc_pages`, `pmm_free_pages`.
@@ -265,7 +265,7 @@ Expected: FAIL with undefined `as_create`/`as_root`.
 
 - [ ] **Step 3: Implement the service**
 
-`as_create(pid)` rejects pid <= 0, out-of-range, and existing roots; allocates one zeroed PMM page; calls `pt_clone_shared((uint64_t*)vmm_master_root(), root)`; stores its physical address in `processes[pid].pml4_phys`. `as_root(pid)` returns that field. `as_map_user()` requires a private root, rejects `vaddr >> 39 < PT_USER_SLOT_FIRST`, ORs `PT_PG_USER` into flags, calls `vmm_invalidate_page()` for each mapped VA, and returns `-1` on the first `pt_map` failure. `as_destroy()` calls `pt_free_user_tables()` then frees the root page and zeroes `pml4_phys`.
+`as_create(pid)` rejects pid <= 0, out-of-range, and existing roots; allocates one zeroed PMM page; calls `pt_clone_shared((uint64_t*)vmm_master_root(), root)`; stores its physical address in `processes[pid].pml4_phys`. `as_root(pid)` returns that field. `as_map_user()` requires a private root, rejects `vaddr >> 39 < PT_USER_SLOT_FIRST`, ORs `PT_PG_USER` into flags, calls `vmm_invalidate_page()` for each mapped VA, and returns `-1` on the first `pt_map` failure. `as_destroy()` calls `pt_free_user_tables()` then frees the root page and zeroes `pml4_phys`. Add the four `as_*` prototypes to `kernel/kernel.h` next to the `vmm_` prototypes — this is required by the binding spec's interface block and is load-bearing for Task 5, whose caller file list does not include `kernel.h`.
 
 - [ ] **Step 4: Run tests and full gate**
 
@@ -275,7 +275,7 @@ Expected: all host suites PASS; gate `QUALITY GATE PASSED`, `BOOT OK`.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add kernel/address_space.c tests/test_address_space.c tests/run_tests.bat
+git add kernel/address_space.c kernel/kernel.h tests/test_address_space.c tests/run_tests.bat
 git commit -m "feat: add per-process address-space service"
 ```
 
