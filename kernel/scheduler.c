@@ -237,6 +237,7 @@ static int process_build_common(uint64_t entry, const char* name,
     p->level = 0;
     p->exit_code = 0;
     p->slice_used = 0;
+    p->pml4_phys = 0;
     set_name(p, name);
     fd_init_process(p);
 

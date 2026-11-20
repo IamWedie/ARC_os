@@ -147,8 +147,8 @@ uint64_t as_root(int pid);            /* 0 when the process has no private root 
 ```
 
 `process_t` gains one field: `uint64_t pml4_phys` (0 = master). It is zeroed by
-`scheduler_init()` and by `process_build_common()` through the existing
-`(process_t){0}`-style initialization, and cleared by `as_destroy()`.
+`scheduler_init()` and explicitly by `process_build_common()` (as of this
+hardening), and cleared by `as_destroy()`.
 
 ### Invariants
 
