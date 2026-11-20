@@ -62,6 +62,9 @@ void vmm_init(void);
 void vmm_map_page(uint64_t vaddr, uint64_t paddr, uint8_t flags);
 void vmm_unmap_page(uint64_t vaddr);
 void vmm_create_user_mapping(uint64_t vaddr, uint64_t paddr, size_t pages);
+uint64_t vmm_master_root(void);
+void vmm_invalidate_page(uint64_t vaddr);
+void vmm_switch_address_space(int pid);
 
 /*
  * Page-table walk core (pagetable.c).
@@ -229,6 +232,7 @@ typedef struct {
     uint64_t kstack_sp;      /* top of this process's kernel stack (TSS RSP0 on ring-3->0) */
     uint64_t stack_base;     /* base of the kernel stack (freed on reap) */
     uint64_t stack_size;     /* kernel stack size in bytes */
+    uint64_t pml4_phys;      /* physical address of the private root; 0 = master */
     uint64_t cpu_ticks;      /* timer ticks charged to this process */
     uint64_t switches_in;    /* times this process was switched in */
     proc_region_t owned[PROCESS_MAX_OWNED_REGIONS]; /* user frame runs */

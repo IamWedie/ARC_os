@@ -26,6 +26,22 @@ static void vmm_invlpg(uint64_t vaddr) {
     __asm__ volatile("invlpg (%0)" :: "r"(vaddr) : "memory");
 }
 
+/* Table pages come from the PMM; the walk core expects them pre-zeroed. */
+static void* vmm_alloc_table(void) {
+    void* page = pmm_alloc_pages(1);
+    if (page) memset(page, 0, 4096);
+    return page;
+}
+
+static void vmm_free_table(void* page) {
+    pmm_free_pages(page, 1);
+}
+
+static const pt_ops_t vmm_ops = {
+    .alloc = vmm_alloc_table,
+    .free  = vmm_free_table,
+};
+
 static void vmm_map_2mb(uint64_t vaddr, uint64_t paddr) {
     uint64_t pml4i = (vaddr >> 39) & 0x1FF;
     uint64_t pdpti = (vaddr >> 30) & 0x1FF;
@@ -68,51 +84,12 @@ for (uint64_t a = start; a < claimed_end && a >= start; a += 0x200000) {
 }
 
 void vmm_map_page(uint64_t vaddr, uint64_t paddr, uint8_t flags) {
-    uint64_t pml4i = (vaddr >> 39) & 0x1FF;
-    uint64_t pdpti = (vaddr >> 30) & 0x1FF;
-    uint64_t pdi   = (vaddr >> 21) & 0x1FF;
-    uint64_t pti   = (vaddr >> 12) & 0x1FF;
-    uint64_t fl    = PG_PRESENT | (flags ? flags : PG_RW);
-
-    uint64_t* pml4 = (uint64_t*)vmm_pml4;
-    if (!(pml4[pml4i] & PG_PRESENT)) {
-        uint64_t t = (uint64_t)pmm_alloc_pages(1);
-        memset((void*)t, 0, 4096);
-        pml4[pml4i] = t | fl;
-    }
-    uint64_t* pdpt = (uint64_t*)(pml4[pml4i] & 0x000FFFFFFF000ULL);
-    if (!(pdpt[pdpti] & PG_PRESENT)) {
-        uint64_t t = (uint64_t)pmm_alloc_pages(1);
-        memset((void*)t, 0, 4096);
-        pdpt[pdpti] = t | fl;
-    }
-    if (pdpt[pdpti] & PG_PSE) return; /* already a 1 GiB page; not handled */
-    uint64_t* pd = (uint64_t*)(pdpt[pdpti] & 0x000FFFFFFF000ULL);
-    if (pd[pdi] & PG_PSE) return;     /* already a 2 MiB page; not handled */
-    if (!(pd[pdi] & PG_PRESENT)) {
-        uint64_t t = (uint64_t)pmm_alloc_pages(1);
-        memset((void*)t, 0, 4096);
-        pd[pdi] = t | fl;
-    }
-    uint64_t* pt = (uint64_t*)(pd[pdi] & 0x000FFFFFFF000ULL);
-    pt[pti] = (paddr & ~0xFFFULL) | fl;
+    pt_map(vmm_pml4, vaddr, paddr, flags, &vmm_ops);
     vmm_invlpg(vaddr);
 }
 
 void vmm_unmap_page(uint64_t vaddr) {
-    uint64_t pml4i = (vaddr >> 39) & 0x1FF;
-    uint64_t pdpti = (vaddr >> 30) & 0x1FF;
-    uint64_t pdi   = (vaddr >> 21) & 0x1FF;
-    uint64_t pti   = (vaddr >> 12) & 0x1FF;
-
-    uint64_t* pml4 = (uint64_t*)vmm_pml4;
-    if (!pml4[pml4i]) return;
-    uint64_t* pdpt = (uint64_t*)(pml4[pml4i] & 0x000FFFFFFF000ULL);
-    if (!pdpt[pdpti]) return;
-    uint64_t* pd = (uint64_t*)(pdpt[pdpti] & 0x000FFFFFFF000ULL);
-    if (!pd[pdi]) return;
-    uint64_t* pt = (uint64_t*)(pd[pdi] & 0x000FFFFFFF000ULL);
-    pt[pti] = 0;
+    pt_unmap(vmm_pml4, vaddr);
     vmm_invlpg(vaddr);
 }
 
@@ -121,4 +98,20 @@ void vmm_create_user_mapping(uint64_t vaddr, uint64_t paddr, size_t pages) {
     for (size_t i = 0; i < pages; i++) {
         vmm_map_page(vaddr + i * 4096, paddr + i * 4096, PG_USER | PG_RW);
     }
+}
+
+/* The master root is statically linked at its physical address (identity map). */
+uint64_t vmm_master_root(void) {
+    return (uint64_t)vmm_pml4;
+}
+
+void vmm_invalidate_page(uint64_t vaddr) {
+    vmm_invlpg(vaddr);
+}
+
+void vmm_switch_address_space(int pid) {
+    uint64_t root = vmm_master_root();
+    if (pid > 0 && pid < MAX_PROCESSES && processes[pid].pml4_phys)
+        root = processes[pid].pml4_phys;
+    __asm__ volatile("movq %0, %%cr3" :: "r"(root) : "memory");
 }
