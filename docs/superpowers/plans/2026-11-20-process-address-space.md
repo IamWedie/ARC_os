@@ -23,7 +23,7 @@
 
 These are the conditions the spec implies that no happy-path test covers. Each is pinned to a task below.
 
-1. A user mapping requested below PML4 slot 256 must be rejected, never written into a shared kernel table — pinned in Task 4 (`test_map_user_rejects_kernel_va`).
+1. A user mapping requested below PML4 slot 1 (i.e. in shared kernel slot 0) must be rejected, never written into a shared kernel table — pinned in Task 4 (`test_map_user_rejects_kernel_va`).
 2. A 2 MiB `PSE` entry found during a walk must be refused without corrupting the entry — pinned in Task 1 (`test_large_page_refused`).
 3. Allocator exhaustion mid-walk must leave a usable root and no orphaned tables — pinned in Task 1 (`test_alloc_failure`).
 4. CR3 selection for PID 0, an out-of-range PID, or a process with no private root must load the master root — pinned in Task 5 (`test_cr3_selection`).
@@ -41,7 +41,7 @@ These are the conditions the spec implies that no happy-path test covers. Each i
 
 **Interfaces:**
 - Consumes: nothing new beyond `kernel.h` types.
-- Produces: `PT_PG_PRESENT`, `PT_PG_RW`, `PT_PG_USER`, `PT_PG_PSE`, `PT_USER_SLOT_FIRST 256`, `pt_ops_t`, `pt_map()`, `pt_lookup()`, `pt_unmap()`, `pt_count_user_pages()`.
+- Produces: `PT_PG_PRESENT`, `PT_PG_RW`, `PT_PG_USER`, `PT_PG_PSE`, `PT_USER_SLOT_FIRST 1` (only PML4 slot 0 is shared kernel; both user VAs are slot 1), `pt_ops_t`, `pt_map()`, `pt_lookup()`, `pt_unmap()`, `pt_count_user_pages()`.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -127,10 +127,11 @@ Append to `tests/test_pagetable.c`:
 
 ```c
 static void test_clone_shared(void) {
-    /* master slot 0 = 0xABC000|PT_PG_PRESENT|PT_PG_RW; master slot 256 = sentinel */
+    /* master slot 0 = 0xABC000|PT_PG_PRESENT|PT_PG_RW; slot 1 = sentinel */
     pt_clone_shared(master, child);
     CHECK(child[0] == master[0], "kernel slot not shared");
     CHECK(child[PT_USER_SLOT_FIRST] == 0, "user slot copied");
+    CHECK(child[2] == 0, "unused slot copied");
 }
 static void test_isolation(void) {
     /* two roots cloned from the same master; map different paddr at USER_CODE_VA */
@@ -138,9 +139,10 @@ static void test_isolation(void) {
           "processes share a leaf");
 }
 static void test_free_user_tables(void) {
-    /* map USER_CODE_VA and USER_STACK_VA (different PML4 slots) + cloned slot 0 */
+    /* USER_CODE_VA and USER_STACK_VA are both slot 1 but different PDPT indices:
+       1 PDPT + 2 PD + 2 PT = 5 private tables. Clone slot 0 from master. */
     pt_free_user_tables(root, &pt_stub_ops);
-    CHECK(pt_stub_freed_count() == 6, "expected 6 private tables, got %d",
+    CHECK(pt_stub_freed_count() == 5, "expected 5 private tables, got %d",
           pt_stub_freed_count());
     CHECK(root[0] == master[0], "shared slot cleared");
     CHECK(pt_count_user_pages(root) == 0, "user leaves remain");
@@ -158,7 +160,7 @@ Expected: FAIL with undefined `pt_clone_shared`/`pt_free_user_tables`.
 
 - [ ] **Step 3: Implement clone and teardown**
 
-`pt_clone_shared(src, dst)` copies `dst[i] = src[i]` for `i < 256` and zeroes `dst[256..511]`. `pt_free_user_tables(root, ops)` recurses only from root slots >= 256: at PDPT/PD levels it recurses into present non-PSE children, then frees the table via `ops->free`; at the PT level it frees without recursing into leaves; it never frees the root and zeroes each user slot after freeing.
+`pt_clone_shared(src, dst)` copies `dst[0] = src[0]` and zeroes `dst[1..511]`. `pt_free_user_tables(root, ops)` recurses only from root slots >= 1: at PDPT/PD levels it recurses into present non-PSE children, then frees the table via `ops->free`; at the PT level it frees without recursing into leaves; it never frees the root and zeroes each user slot after freeing.
 
 - [ ] **Step 4: Run test to verify it passes**
 

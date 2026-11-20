@@ -26,8 +26,10 @@ The current kernel's VA layout is unusual but load-bearing:
 | VA region | PML4 slot | Flags | Owner |
 |---|---|---|---|
 | Identity map of RAM, kernel text, kernel stacks, MMIO | 0 | supervisor `PRESENT|RW` (2 MiB and 4 KiB) | shared |
-| User code `0x8000000000` | 256 | `PRESENT|RW|USER` (4 KiB) | private |
-| User stack `0x9000000000` | 288 | `PRESENT|RW|USER` (4 KiB) | private |
+| User code `0x8000000000` | 1 (PDPT 0) | `PRESENT|RW|USER` (4 KiB) | private |
+| User stack `0x9000000000` | 1 (PDPT 64) | `PRESENT|RW|USER` (4 KiB) | private |
+
+A PML4 slot covers `2^39` bytes (512 GiB), so `0x8000000000 == 2^39` is slot **1**, not slot 256. Slot 256 begins at `2^47` (`0x0000800000000000`), the canonical upper half. The earlier 256 boundary was an arithmetic error; the corrected split is "kernel slot 0 shared, slots 1..511 private".
 
 ## Goals
 
@@ -66,13 +68,17 @@ the cost of getting it wrong so a later reviewer can challenge it.
   stacks and trap frames; giving them private copies wastes frames without
   adding isolation.
 
-- **A2 — Share PML4 slots [0,256), keep [256,512) private.** The clone copies
-  the first 256 master entries verbatim and zeroes the rest. Those 256 slots
-  contain every kernel identity map and MMIO mapping (`vmm_map_2mb()` rejects
-  `pml4i != 0`; ACPI/LAPIC/IOAPIC map 4 KiB pages in the same slot).
-  *Cost if wrong:* copying user slots shares page tables between processes
-  (the original bug); dropping slot 0 makes the kernel invisible after CR3
-  load and faults on the first `iretq`.
+- **A2 — Share PML4 slot 0 only, keep slots 1..511 private.** The clone copies
+  master entry 0 verbatim and zeroes the rest. Slot 0 contains every kernel
+  identity map and MMIO mapping (`vmm_map_2mb()` rejects `pml4i != 0`;
+  ACPI/LAPIC/IOAPIC map 4 KiB pages in the same slot). Both user VAs are slot 1
+  (with different PDPT indices), so sharing slots 1..255 would reintroduce the
+  original bug.
+  *Cost if wrong:* copying user slots shares page tables between processes;
+  dropping slot 0 makes the kernel invisible after CR3 load and faults on the
+  first `iretq`. Moving the user VAs into the upper half instead was rejected
+  because it would change the shell's link addresses and break the frozen
+  embedded-blob gate.
 
 - **A3 — Track private page tables by walking the root, not in `process_t`.**
   `pt_free_user_tables()` recursively frees tables reachable from user slots;
@@ -111,7 +117,7 @@ the cost of getting it wrong so a later reviewer can challenge it.
 #define PT_PG_RW      (1ULL << 1)
 #define PT_PG_USER    (1ULL << 2)
 #define PT_PG_PSE     (1ULL << 7)
-#define PT_USER_SLOT_FIRST 256       /* PML4 slots [0,256) are shared kernel */
+#define PT_USER_SLOT_FIRST 1         /* only PML4 slot 0 is shared kernel */
 
 typedef struct {
     void* (*alloc)(void);            /* zeroed 4096-byte page, or NULL */
@@ -150,9 +156,11 @@ uint64_t as_root(int pid);            /* 0 when the process has no private root 
   `PT_PG_PRESENT|PT_PG_RW` (preserves today's MMIO mapper behaviour). A large
   page encountered on the walk is refused, not split.
 - `pt_lookup()` returns `NULL` for any absent level or large-page path.
-- `pt_clone_shared()` copies [0,256) and zeroes [256,512). It never allocates.
-- `pt_free_user_tables()` frees only pages reachable from slots >= 256 and
+- `pt_clone_shared()` copies slot 0 and zeroes slots 1..511. It never allocates.
+- `pt_free_user_tables()` frees only pages reachable from slots >= 1 and
   never frees the root. It zeroes those root slots when done.
+- `pt_count_user_pages()` counts present 4 KiB leaves only in slots >= 1,
+  never in the shared kernel slot 0.
 - `as_create()` rejects `pid <= 0`, out-of-range pids, and a process that
   already has a root. On allocation failure the process keeps `pml4_phys == 0`.
 - `as_map_user()` requires a private root and ORs `PT_PG_USER` into every leaf
@@ -202,7 +210,7 @@ uint64_t as_root(int pid);            /* 0 when the process has no private root 
 | Risk | Mitigation |
 |---|---|
 | CR3 switched while the current stack is not mapped in the new root | All kernel stacks and handler code are in shared slot 0; switch happens on the current kernel stack, which remains mapped. |
-| Reap frees a shared table | Teardown walks only user slots (>= 256); shared slot 0 is never traversed. |
+| Reap frees a shared table | Teardown walks only user slots (>= 1); shared slot 0 is never traversed. |
 | Partial `as_map_user()` failure leaks tables | Loader keeps its `preempt_disable()` window and uses kill+reap; `as_destroy()` frees the partial root. |
 | Boot-time MMIO mappers run before a process root exists | They call `vmm_map_page()` on the master root, unchanged. |
 | Host tests diverge from kernel flags | Both use the same `kernel/pagetable.c`; only allocator and invalidate hook differ. |
