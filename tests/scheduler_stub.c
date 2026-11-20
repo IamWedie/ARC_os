@@ -19,3 +19,9 @@ void set_tss_rsp0(uint64_t rsp) {
 
 /* entry64.S normally provides this linker symbol. */
 uint8_t __stack_top[64] __attribute__((aligned(16)));
+
+/* Address-space hooks: record the requested CR3 pid and teardown calls. */
+int scheduler_stub_cr3_pid = -1;
+int as_destroy_calls;
+void vmm_switch_address_space(int pid) { scheduler_stub_cr3_pid = pid; }
+void as_destroy(int pid) { (void)pid; as_destroy_calls++; }

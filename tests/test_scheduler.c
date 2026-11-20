@@ -15,6 +15,8 @@
 
 extern void pmm_stub_reset(void);
 extern uint64_t pmm_stub_used_pages(void);
+extern int scheduler_stub_cr3_pid;
+extern int as_destroy_calls;
 
 static int tests_passed;
 static int tests_failed;
@@ -36,6 +38,8 @@ static void fake_entry(void) {}
 static void reset_world(void) {
     pmm_stub_reset();
     scheduler_init();
+    scheduler_stub_cr3_pid = -1;
+    as_destroy_calls = 0;
 }
 
 static uint64_t rsp_of(int pid) {
@@ -377,13 +381,26 @@ static void test_kill_reap(void) {
     CHECK(pmm_stub_used_pages() == pages_before,
           "reap leaked frames: %llu used",
           (unsigned long long)pmm_stub_used_pages());
+    CHECK(as_destroy_calls == 1, "reap did not destroy address space");
     CHECK(scheduler_reap(p1) == -1, "double reap accepted");
+    CHECK(as_destroy_calls == 1, "failed reap destroyed address space");
     CHECK(scheduler_reap(0) == -1, "reaped a live process");
 
     /* The freed slot must be reused by the next creation. */
     int p2 = process_create(fake_entry, "two");
     CHECK(p2 == p1, "slot %d was not reused (got %d)", p1, p2);
     check_totals("after reap and reuse");
+}
+
+static void test_cr3_selection(void) {
+    printf("\n=== Test 6e: CR3 selection on real switches ===\n");
+    reset_world();
+    int p1 = process_create(fake_entry, "cr3");
+    scheduler_switch(0x1000);
+    CHECK(scheduler_stub_cr3_pid == p1, "switch did not load child root");
+    scheduler_kill(p1);
+    scheduler_switch(0x2000);
+    CHECK(scheduler_stub_cr3_pid == 0, "fallback did not load master root");
 }
 
 /*
@@ -591,6 +608,7 @@ int main(void) {
     test_block_wake();
     test_yield();
     test_kill_reap();
+    test_cr3_selection();
     test_user_owned_frames();
     test_owned_frame_validation();
     test_automatic_reaping();

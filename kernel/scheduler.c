@@ -351,6 +351,7 @@ static uint64_t schedule(uint64_t rsp, int voluntary) {
         /* Current blocked or died; fall back to the kernel/idle stack. */
         state_set(0, PROC_RUNNING);
         processes[0].switches_in++;
+        vmm_switch_address_space(0);
         current_process = 0;
         set_tss_rsp0(processes[0].kstack_sp);
         stats.context_switches++;
@@ -363,6 +364,7 @@ static uint64_t schedule(uint64_t rsp, int voluntary) {
         return 0;
     }
 
+    vmm_switch_address_space(next);
     current_process = next;
     processes[next].switches_in++;
     set_tss_rsp0(processes[next].kstack_sp);
@@ -439,6 +441,8 @@ int scheduler_reap(int pid) {
     if (pid < 0 || pid >= MAX_PROCESSES) return -1;
     if (pid == 0 || pid == current_process) return -1;
     if (processes[pid].state != PROC_ZOMBIE) return -1;
+
+    as_destroy(pid);
 
     if (processes[pid].stack_base && processes[pid].stack_size) {
         pmm_free_pages((void*)(uintptr_t)processes[pid].stack_base,
