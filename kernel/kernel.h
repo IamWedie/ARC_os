@@ -136,6 +136,58 @@ typedef struct {
     uint64_t pages;  /* number of 4 KiB frames in the run */
 } proc_region_t;
 
+/* Per-process file descriptors and shared open file descriptions (fd.c). */
+#define FD_MAX 16
+#define OFD_MAX 32
+
+#define FD_STDIN  0
+#define FD_STDOUT 1
+#define FD_STDERR 2
+
+#define O_RDONLY 0x0000
+#define O_WRONLY 0x0001
+#define O_RDWR   0x0002
+#define O_ACCMODE 0x0003
+#define O_CREAT  0x0100
+#define O_TRUNC  0x0200
+#define O_APPEND 0x0400
+
+#ifndef SEEK_SET
+#define SEEK_SET 0
+#endif
+#ifndef SEEK_CUR
+#define SEEK_CUR 1
+#endif
+#ifndef SEEK_END
+#define SEEK_END 2
+#endif
+
+typedef enum {
+    FD_ENTRY_FREE = 0,
+    FD_ENTRY_CONSOLE_IN,
+    FD_ENTRY_CONSOLE_OUT,
+    FD_ENTRY_CONSOLE_ERR,
+    FD_ENTRY_FILE
+} fd_entry_kind_t;
+
+/*
+ * An open file description. Fds in one or more processes point at an entry
+ * in the fixed g_ofds[] pool; refs counts the fds sharing it.
+ */
+typedef struct {
+    int used;
+    int file_slot;
+    uint32_t offset;
+    uint32_t flags;
+    unsigned refs;
+} open_file_t;
+
+typedef struct {
+    fd_entry_kind_t kind;
+    int ofd;          /* index into the global OFD table, or -1 */
+    uint32_t flags;   /* per-fd flags; currently close-on-exec is reserved */
+} fd_entry_t;
+
 typedef struct {
     uint64_t rsp;            /* saved kernel stack pointer (trap frame) */
     uint64_t rip;            /* entry point */
@@ -152,6 +204,7 @@ typedef struct {
     int exit_code;
     uint32_t slice_used;     /* ticks used in the current quantum */
     char name[32];
+    fd_entry_t fds[FD_MAX];
 } process_t;
 
 typedef struct {
@@ -212,6 +265,19 @@ extern volatile int preempt_disabled;
 /* Assembly entry for the software-yield interrupt (vector 0x81). */
 extern void yield_stub(void);
 
+/* File descriptor table (fd.c). File-backed paths use the fs slot API. */
+void fd_init_process(process_t* p);
+void fd_close_all(process_t* p);
+int fd_clone_process(const process_t* parent, process_t* child);
+int fd_open(int pid, const char* name, uint32_t flags);
+int fd_dup(int pid, int oldfd);
+int fd_close(int pid, int fd);
+int fd_read(int pid, int fd, void* buf, size_t count);
+int fd_write(int pid, int fd, const void* buf, size_t count);
+int fd_seek(int pid, int fd, int64_t offset, int whence);
+int fd_size(int pid, int fd);
+int fd_truncate(int pid, int fd);
+
 /* Filesystem */
 #define FS_SECTOR_SIZE 512
 #define FS_MAX_FILES 32
@@ -240,6 +306,18 @@ int fs_list(void);
 int fs_file_size(int fd);
 int fs_truncate(int fd);
 int fs_rename(const char* oldname, const char* newname);
+
+/*
+ * Slot-level filesystem access used by the descriptor layer. Slots are
+ * fs_file_t indices, not descriptor numbers.
+ */
+int fs_open_slot(const char* name, int create);
+int fs_slot_read(int slot, uint32_t off, void* buf, size_t count);
+int fs_slot_write(int slot, uint32_t off, const void* buf, size_t count);
+int fs_slot_size(int slot);
+int fs_slot_truncate(int slot);
+int fs_slot_add_ref(int slot);
+void fs_slot_release(int slot);
 
 /* Serial (COM1) */
 void serial_putchar(char c);
@@ -310,6 +388,7 @@ extern const uint8_t _binary_user_shell_bin_size[];
 #define SYS_TRUNC 10
 #define SYS_RENAME 11
 #define SYS_CLEAR 12
+#define SYS_DUP   13
 
 /* Kernel entry */
 void kernel_main(uint64_t multiboot_addr);
