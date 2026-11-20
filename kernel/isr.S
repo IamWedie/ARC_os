@@ -213,6 +213,7 @@ exc_stub_table:
 syscall_stub:
     pushq $0                /* return-value slot (popped into rax below) */
     PUSHREGS
+    movq %rsp, syscall_frame_rsp(%rip) /* publish frame for sys_fork */
     call syscall_dispatch
     movq %rax, 15*8(%rsp)   /* park result above the saved regs */
     POPREGS

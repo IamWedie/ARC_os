@@ -39,6 +39,9 @@ volatile int current_process = 0;
 volatile int num_processes = 0;
 volatile int preempt_disabled = 0;
 
+/* Written by syscall_stub: rsp of the saved GPR block (word 0 = r15). */
+volatile uint64_t syscall_frame_rsp;
+
 static run_queue_t runq[SCHED_MLFQ_LEVELS];
 static uint8_t queued[MAX_PROCESSES];
 static scheduler_stats_t stats;
@@ -254,6 +257,86 @@ int process_create(void (*entry)(void), const char* name) {
 
 int process_create_user(uint64_t entry, uint64_t kstack_top, const char* name) {
     return process_build_common(entry, name, 1, kstack_top, USER_STACK_TOP);
+}
+
+/*
+ * Fork a user process from the frame syscall_stub captured. The source has a
+ * 168-byte return slot, but a context switch resumes through the timer/yield
+ * stubs (POPREGS + iretq), so the child gets the 160-byte timer-stub layout
+ * and no return slot. The saved rax is forced to 0 so the child observes
+ * fork() returning 0.
+ */
+int process_fork(int parent_pid, const syscall_frame_t* frame) {
+    if (parent_pid <= 0 || parent_pid >= MAX_PROCESSES || !frame) return -1;
+
+    process_t* parent = &processes[parent_pid];
+    if (!parent->user_mode) return -1;
+    if (parent->state != PROC_READY && parent->state != PROC_RUNNING) return -1;
+
+    int pid = -1;
+    for (int i = 1; i < MAX_PROCESSES; i++) {
+        if (processes[i].state == PROC_FREE) {
+            pid = i;
+            break;
+        }
+    }
+    if (pid < 0) return -1;
+
+    void* stack = pmm_alloc_pages(PROCESS_STACK_PAGES);
+    if (!stack) return -1;
+    uint64_t top = (uint64_t)stack + PROCESS_STACK_PAGES * 4096;
+
+    /* 15 GPRs in PUSHREGS/POPREGS order, then the five iretq words. */
+    uint64_t* gpr = (uint64_t*)(top - (PUSHREG_COUNT * 8) - IRETQ_FRAME_BYTES);
+    gpr[0]  = frame->r15;
+    gpr[1]  = frame->r14;
+    gpr[2]  = frame->r13;
+    gpr[3]  = frame->r12;
+    gpr[4]  = frame->rbp;
+    gpr[5]  = frame->rbx;
+    gpr[6]  = frame->r11;
+    gpr[7]  = frame->r10;
+    gpr[8]  = frame->r9;
+    gpr[9]  = frame->r8;
+    gpr[10] = frame->rdi;
+    gpr[11] = frame->rsi;
+    gpr[12] = frame->rdx;
+    gpr[13] = frame->rcx;
+    gpr[14] = 0;                 /* child's fork() returns 0 */
+
+    uint64_t* fr = (uint64_t*)top;
+    fr[-5] = frame->rip;
+    fr[-4] = frame->cs;
+    fr[-3] = frame->rflags;
+    fr[-2] = frame->user_rsp;
+    fr[-1] = frame->ss;
+
+    process_t* p = &processes[pid];
+    p->rsp = (uint64_t)gpr;
+    p->rip = frame->rip;
+    p->kstack_sp = top;
+    p->stack_base = (uint64_t)stack;
+    p->stack_size = PROCESS_STACK_PAGES * 4096;
+    for (int i = 0; i < PROCESS_MAX_OWNED_REGIONS; i++) {
+        p->owned[i].base = 0;
+        p->owned[i].pages = 0;
+    }
+    p->cpu_ticks = 0;
+    p->switches_in = 0;
+    p->user_mode = 1;
+    p->level = 0;
+    p->exit_code = 0;
+    p->slice_used = 0;
+    p->pml4_phys = 0;
+    p->ppid = parent_pid;
+    set_name(p, "forked");
+    fd_init_process(p);
+
+    state_set(pid, PROC_READY);
+    queue_push(pid, 0);
+
+    if (pid + 1 > num_processes) num_processes = pid + 1;
+    return pid;
 }
 
 /*

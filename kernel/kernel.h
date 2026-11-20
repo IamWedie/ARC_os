@@ -255,6 +255,7 @@ typedef struct {
     proc_region_t owned[PROCESS_MAX_OWNED_REGIONS]; /* user frame runs */
     int user_mode;           /* nonzero if the entry frame uses user segments */
     int pid;
+    int ppid;                /* parent pid; 0 for the kernel/idle or orphans */
     int state;               /* proc_state_t */
     int level;               /* MLFQ level, 0 = highest priority */
     int exit_code;
@@ -300,6 +301,27 @@ void scheduler_exit_current(int code) __attribute__((noreturn));
 int scheduler_check_invariants(void);
 int process_create(void (*entry)(void), const char* name);
 int process_create_user(uint64_t entry, uint64_t kstack_top, const char* name);
+/*
+ * Trap frame captured by syscall_stub: pushq $0 (return slot) then PUSHREGS
+ * (15 GPRs in r15..rax order), followed by the CPU's iretq words. 21 words /
+ * 168 bytes total. syscall_frame_rsp points at word 0 (saved r15).
+ */
+typedef struct {
+    uint64_t r15, r14, r13, r12, rbp, rbx, r11, r10, r9, r8;
+    uint64_t rdi, rsi, rdx, rcx, rax, ret_slot;
+    uint64_t rip, cs, rflags, user_rsp, ss;
+} syscall_frame_t;
+
+extern volatile uint64_t syscall_frame_rsp;
+
+/*
+ * Fork a user process from its captured int 0x80 trap frame. The child gets a
+ * fresh kernel stack whose saved context uses the timer-stub layout (15 GPRs +
+ * iretq, no return slot) and whose saved rax is 0. Returns the child pid, or
+ * -1 for a bad/kernel-mode parent or resource exhaustion. The caller must
+ * still clone the address space and fd table (see as_clone/fd_clone_process).
+ */
+int process_fork(int parent_pid, const syscall_frame_t* frame);
 
 /*
  * Allocate `pages` physical frames and register them as owned by `pid`.
@@ -448,6 +470,8 @@ extern const uint8_t _binary_user_shell_bin_size[];
 #define SYS_RENAME 11
 #define SYS_CLEAR 12
 #define SYS_DUP   13
+#define SYS_FORK  14
+#define SYS_WAIT  15
 
 /* Kernel entry */
 void kernel_main(uint64_t multiboot_addr);
