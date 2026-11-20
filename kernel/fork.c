@@ -11,14 +11,21 @@
 #include "kernel.h"
 
 long sys_fork(void) {
+    /* Must be first: a timer here could let another syscall overwrite the
+     * single global frame pointer before this caller has captured it. */
+    preempt_disable();
+
     int parent_pid = current_process;
-    if (parent_pid <= 0 || parent_pid >= MAX_PROCESSES) return -1;
-    if (!processes[parent_pid].user_mode) return -1;
+    uint64_t frame_rsp = syscall_frame_rsp;
+
+    if (parent_pid <= 0 || parent_pid >= MAX_PROCESSES ||
+        !processes[parent_pid].user_mode || frame_rsp == 0) {
+        preempt_enable();
+        return -1;
+    }
 
     const syscall_frame_t* frame =
-        (const syscall_frame_t*)(uintptr_t)syscall_frame_rsp;
-
-    preempt_disable();
+        (const syscall_frame_t*)(uintptr_t)frame_rsp;
 
     int child = process_fork(parent_pid, frame);
     if (child < 0) {
@@ -44,12 +51,19 @@ long sys_fork(void) {
 
 long sys_wait(int* status) {
     for (;;) {
+        /* Poll and publish the BLOCKED state as one atomic step: a child exit
+         * cannot slip between the scan and the block and lose its wakeup. */
+        preempt_disable();
         int pid = scheduler_wait_child(current_process, status);
-        if (pid != 0) return pid;
+        if (pid != 0) {
+            preempt_enable();
+            return pid;
+        }
 
-        /* Live children but nothing collectable: park until one exits, then
-         * rescan. ECHILD (-1) and a collected pid are both returned directly,
-         * so only the block case reaches scheduler_block_current(). */
-        scheduler_block_current();
+        /* schedule() is a no-op while preemption is disabled, so the block
+         * happens under the window but the yield happens after it closes. */
+        int blocked = scheduler_block(current_process);
+        preempt_enable();
+        if (blocked == 0) scheduler_yield();
     }
 }

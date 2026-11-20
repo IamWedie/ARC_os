@@ -587,6 +587,15 @@ static void test_sys_fork_failure_paths(void) {
     fill_frame(&frame);
     syscall_frame_rsp = (uint64_t)&frame;
 
+    /* No published trap frame: reject without creating anything and restore
+     * the preemption level on the early return. */
+    uint64_t saved_frame_rsp = syscall_frame_rsp;
+    syscall_frame_rsp = 0;
+    CHECK(sys_fork() == -1, "zero trap frame was accepted");
+    CHECK(preempt_disabled == 0,
+          "preempt left disabled after zero-frame rejection");
+    syscall_frame_rsp = saved_frame_rsp;
+
     /* Corrupt one parent fd so fd_clone_process() must fail after the child
      * slot and address space have already been built. */
     processes[parent].fds[FD_MAX - 1].kind = FD_ENTRY_FILE;
@@ -619,6 +628,51 @@ static void test_sys_fork_failure_paths(void) {
           "run-queue invariants violated after failed fork");
 }
 
+/*
+ * Missed-wakeup regression: sys_wait must hold preemption from the child scan
+ * through the parent's BLOCKED transition. The old ordering let a child exit
+ * between the two, so scheduler_wake_parent_if_blocked() saw a RUNNING parent
+ * and the parent then blocked forever with an unreaped zombie. This pins the
+ * atomic sequence with the real scheduler primitives (no int $0x81).
+ */
+static void test_sys_wait_missed_wakeup_regression(void) {
+    printf("\n=== Test 13: sys_wait missed-wakeup regression ===\n");
+    reset_world();
+
+    int parent = -1;
+    int child = make_parent_with_child(&parent);
+    CHECK(child > 0, "child fork failed (pid %d)", child);
+    if (child <= 0) return;
+    CHECK(current_process == parent, "current = %d, want parent %d",
+          current_process, parent);
+    CHECK(processes[parent].state == PROC_RUNNING, "parent not RUNNING");
+
+    int status = -99;
+    /* sys_wait's window: preemption off before the scan, BLOCKED published
+     * before it is released. */
+    preempt_disable();
+    int polled = scheduler_wait_child(parent, &status);
+    CHECK(polled == 0, "live child must return 0 (block), got %d", polled);
+    CHECK(status == -99, "status written for a live child");
+    CHECK(preempt_disabled == 1, "preemption enabled during wait scan");
+    CHECK(scheduler_block(current_process) == 0, "block parent failed");
+    CHECK(processes[parent].state == PROC_BLOCKED,
+          "parent state = %d, want BLOCKED with preemption disabled",
+          processes[parent].state);
+    CHECK(preempt_disabled == 1, "preemption enabled before block completed");
+    preempt_enable();
+    CHECK(preempt_disabled == 0, "preempt left disabled after wait block");
+
+    /* Once BLOCKED is published, the child's exit wakes the parent instead of
+     * losing the wakeup. The child's trap frame is never executed here. */
+    scheduler_exit_process(child, 7);
+    CHECK(processes[parent].state == PROC_READY,
+          "missed wakeup: parent state = %d, want READY",
+          processes[parent].state);
+    CHECK(processes[child].state == PROC_ZOMBIE, "child not left for wait()");
+    CHECK(status == -99, "status changed while parent was blocked");
+}
+
 int main(void) {
     printf("ARC OS fork/wait test (real kernel/scheduler.c)\n");
 
@@ -634,6 +688,7 @@ int main(void) {
     test_sys_wait_collect_and_echild();
     test_syscall_dispatch_fork_wait();
     test_sys_fork_failure_paths();
+    test_sys_wait_missed_wakeup_regression();
 
     printf("\n=== Results ===\n");
     printf("  passed: %d\n", tests_passed);
