@@ -176,6 +176,7 @@ void scheduler_init(void) {
     processes[0].level = 0;
     state_set(0, PROC_RUNNING);
     set_name(&processes[0], "kernel");
+    fd_init_process(&processes[0]);
 
     set_tss_rsp0(processes[0].kstack_sp);
 }
@@ -237,6 +238,7 @@ static int process_build_common(uint64_t entry, const char* name,
     p->exit_code = 0;
     p->slice_used = 0;
     set_name(p, name);
+    fd_init_process(p);
 
     state_set(pid, PROC_READY);
     queue_push(pid, 0);
@@ -450,6 +452,8 @@ int scheduler_reap(int pid) {
         r->base = 0;
         r->pages = 0;
     }
+
+    fd_close_all(&processes[pid]);
 
     processes[pid].rsp = 0;
     processes[pid].rip = 0;

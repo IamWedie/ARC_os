@@ -5,7 +5,11 @@
  * hardware-facing pieces it needs: the TSS RSP0 write and the entry64 stack
  * symbol used by process 0.  PMM allocation comes from tests/pmm_stub.c.
  */
-#include <stdint.h>
+#include "kernel.h"
+
+/* scheduler.c calls the fd lifecycle hooks; this suite does not link fd.c. */
+void fd_init_process(process_t* p) { (void)p; }
+void fd_close_all(process_t* p) { (void)p; }
 
 uint64_t scheduler_stub_tss_rsp0;
 

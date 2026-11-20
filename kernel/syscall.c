@@ -1,25 +1,8 @@
 #include "kernel.h"
 
-int syscall_write(int fd, const char* buf, size_t count) {
-    (void)fd;
-    terminal_write(buf, count);
-    return (int)count;
-}
-
-int syscall_read(int fd, char* buf, size_t count) {
-    if (fd >= FS_SLOT_FIRST) return fs_read(fd, buf, count);
-    size_t got = 0;
-    while (got < count) {
-        int c = kbd_getchar();
-        while (c < 0) {
-            __asm__ volatile("sti; hlt");
-            c = kbd_getchar();
-        }
-        buf[got++] = (char)c;
-        if (c == '\n' && fd == 0) break;
-    }
-    return got;
-}
+/* Flags accepted by SYS_OPEN. O_ACCMODE covers O_RDONLY/O_WRONLY/O_RDWR. */
+#define SYSCALL_OPEN_FLAG_MASK \
+    ((uint64_t)(O_ACCMODE | O_CREAT | O_TRUNC | O_APPEND))
 
 void syscall_exit(int code) {
     terminal_putstring("[Process exited]\n");
@@ -29,21 +12,29 @@ void syscall_exit(int code) {
 /* Entry for the int 0x80 gate. Args arrive in SysV order:
  *   rdi = syscall number, rsi/rdx/rcx = a1/a2/a3 (set by user wrapper). */
 long syscall_dispatch(uint64_t n, uint64_t a1, uint64_t a2, uint64_t a3) {
+    int pid = current_process;
+
     switch (n) {
     case SYS_WRITE:
-        if (a1 < FS_SLOT_FIRST)
-            return syscall_write((int)a1, (const char*)a2, (size_t)a3);
-        return fs_write((int)a1, (const void*)a2, (size_t)a3);
+        return fd_write(pid, (int)a1, (const void*)a2, (size_t)a3);
     case SYS_READ:
-        return syscall_read((int)a1, (char*)a2, (size_t)a3);
+        return fd_read(pid, (int)a1, (void*)a2, (size_t)a3);
     case SYS_EXIT:  syscall_exit((int)a1); return 0;
-    case SYS_OPEN:  return fs_open((const char*)a1, (int)a2);
-    case SYS_CLOSE: return fs_close((int)a1);
+    case SYS_OPEN:
+        /* a2 is the flag word: reject unknown bits and an invalid access mode
+         * before the fd layer allocates anything. */
+        if ((a2 & ~SYSCALL_OPEN_FLAG_MASK) != 0) return -1;
+        if ((a2 & O_ACCMODE) == O_ACCMODE) return -1;
+        return fd_open(pid, (const char*)a1, (uint32_t)a2);
+    case SYS_CLOSE: return fd_close(pid, (int)a1);
     case SYS_LS:    fs_list(); return 0;
     case SYS_DEL:   return fs_delete((const char*)a1);
-    case SYS_SEEK:  return fs_seek((int)a1, (uint32_t)a2);
-    case SYS_SIZE:  return fs_file_size((int)a1);
-    case SYS_TRUNC: return fs_truncate((int)a1);
+    case SYS_SEEK:
+        if (a3 != SEEK_SET && a3 != SEEK_CUR && a3 != SEEK_END) return -1;
+        return fd_seek(pid, (int)a1, (int64_t)a2, (int)a3);
+    case SYS_SIZE:  return fd_size(pid, (int)a1);
+    case SYS_TRUNC: return fd_truncate(pid, (int)a1);
+    case SYS_DUP:   return fd_dup(pid, (int)a1);
     case SYS_RENAME:return fs_rename((const char*)a1, (const char*)a2);
     case SYS_CLEAR: terminal_clear(); return 0;
     default:        return -1;

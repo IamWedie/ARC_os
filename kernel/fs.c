@@ -263,9 +263,11 @@ void fs_init(void) {
             "Commands: help, clear, ls, echo, cat <file>, rm <file>\n";
         uint32_t len = 0;
         while (text[len]) len++;
-        int fd = fs_open("welcome.txt", 1);
-        fs_write(fd, text, len);
-        fs_close(fd);
+        int slot = fs_open_slot("welcome.txt", 1);
+        if (slot >= 0 && fs_slot_add_ref(slot) == 0) {
+            fs_slot_write(slot, 0, text, len);
+            fs_slot_release(slot);
+        }
     }
 
     fs_disk_fs_local_ok = 1;
@@ -285,51 +287,75 @@ static void fs_selftest(void) {
     uint32_t plen = 0;
     while (payload[plen]) plen++;
 
-    int fd = fs_open("selftest.tmp", 1);
-    if (fd < FS_SLOT_FIRST) { terminal_putstring("FS selftest: open(create) FAIL\n"); return; }
-
-    if (fs_write(fd, payload, plen) != (int)plen) {
-        terminal_putstring("FS selftest: write FAIL\n");
+    int slot = fs_open_slot("selftest.tmp", 1);
+    if (slot < 0 || fs_slot_add_ref(slot) < 0) {
+        terminal_putstring("FS selftest: open(create) FAIL\n");
         return;
     }
-    if (fs_close(fd) != 0) { terminal_putstring("FS selftest: close FAIL\n"); return; }
+    if (fs_slot_write(slot, 0, payload, plen) != (int)plen) {
+        terminal_putstring("FS selftest: write FAIL\n");
+        fs_slot_release(slot);
+        return;
+    }
+    fs_slot_release(slot);
 
-    fd = fs_open("selftest.tmp", 0);
-    if (fd < FS_SLOT_FIRST) { terminal_putstring("FS selftest: open(read) FAIL\n"); return; }
-
+    slot = fs_open_slot("selftest.tmp", 0);
+    if (slot < 0 || fs_slot_add_ref(slot) < 0) {
+        terminal_putstring("FS selftest: open(read) FAIL\n");
+        return;
+    }
     char readbuf[128];
-    long n = fs_read(fd, readbuf, sizeof(readbuf));
-    if (n != (long)plen) { terminal_putstring("FS selftest: read len FAIL\n"); return; }
-    for (long i = 0; i < n; i++) {
+    int n = fs_slot_read(slot, 0, readbuf, sizeof(readbuf));
+    if (n != (int)plen) {
+        terminal_putstring("FS selftest: read len FAIL\n");
+        fs_slot_release(slot);
+        return;
+    }
+    for (int i = 0; i < n; i++) {
         if (readbuf[i] != payload[i]) {
             terminal_putstring("FS selftest: data mismatch FAIL\n");
+            fs_slot_release(slot);
             return;
         }
     }
-    if (fs_close(fd) != 0) { terminal_putstring("FS selftest: close2 FAIL\n"); return; }
+    fs_slot_release(slot);
     if (fs_delete("selftest.tmp") != 0) { terminal_putstring("FS selftest: delete FAIL\n"); return; }
 
     /* Multi-block round trip (>512 B so extent allocation + grow path runs). */
     char big[1600];
     for (int i = 0; i < (int)sizeof(big); i++) big[i] = (char)('a' + (i % 26));
-    fd = fs_open("big.tmp", 1);
-    if (fd < FS_SLOT_FIRST) { terminal_putstring("FS selftest: big open FAIL\n"); return; }
-    if (fs_write(fd, big, sizeof(big)) != (int)sizeof(big)) {
-        terminal_putstring("FS selftest: big write FAIL\n");
+    slot = fs_open_slot("big.tmp", 1);
+    if (slot < 0 || fs_slot_add_ref(slot) < 0) {
+        terminal_putstring("FS selftest: big open FAIL\n");
         return;
     }
-    if (fs_close(fd) != 0) { terminal_putstring("FS selftest: big close FAIL\n"); return; }
-    fd = fs_open("big.tmp", 0);
+    if (fs_slot_write(slot, 0, big, sizeof(big)) != (int)sizeof(big)) {
+        terminal_putstring("FS selftest: big write FAIL\n");
+        fs_slot_release(slot);
+        return;
+    }
+    fs_slot_release(slot);
+
+    slot = fs_open_slot("big.tmp", 0);
+    if (slot < 0 || fs_slot_add_ref(slot) < 0) {
+        terminal_putstring("FS selftest: big open2 FAIL\n");
+        return;
+    }
     char bigread[1700];
-    long br = fs_read(fd, bigread, sizeof(bigread));
-    if (br != (long)sizeof(big)) { terminal_putstring("FS selftest: big read len FAIL\n"); return; }
+    int br = fs_slot_read(slot, 0, bigread, sizeof(bigread));
+    if (br != (int)sizeof(big)) {
+        terminal_putstring("FS selftest: big read len FAIL\n");
+        fs_slot_release(slot);
+        return;
+    }
     for (int i = 0; i < (int)sizeof(big); i++) {
         if (bigread[i] != big[i]) {
             terminal_putstring("FS selftest: big data FAIL\n");
+            fs_slot_release(slot);
             return;
         }
     }
-    if (fs_close(fd) != 0) { terminal_putstring("FS selftest: big close2 FAIL\n"); return; }
+    fs_slot_release(slot);
     if (fs_delete("big.tmp") != 0) { terminal_putstring("FS selftest: big delete FAIL\n"); return; }
 
     terminal_putstring("FS selftest: PASS\n");
@@ -441,48 +467,6 @@ void fs_slot_release(int slot) {
     }
 }
 
-/* --- legacy fd-shaped wrappers (removed once syscalls use fd.c) --- */
-
-int fs_open(const char* name, int create) {
-    int slot = fs_open_slot(name, create);
-    if (slot < 0) return -1;
-    if (fs_slot_add_ref(slot) < 0) return -1;
-    fs_files[slot].pos = 0;
-    return FS_SLOT_FIRST + slot;
-}
-
-int fs_read(int fd, void* buf, size_t count) {
-    int slot = fd - FS_SLOT_FIRST;
-    if (slot < 0 || slot >= FS_MAX_FILES || !fs_files[slot].used) return -1;
-    int n = fs_slot_read(slot, fs_files[slot].pos, buf, count);
-    if (n > 0) fs_files[slot].pos += (uint32_t)n;
-    return n;
-}
-
-int fs_write(int fd, const void* buf, size_t count) {
-    int slot = fd - FS_SLOT_FIRST;
-    if (slot < 0 || slot >= FS_MAX_FILES || !fs_files[slot].used) return -1;
-    int n = fs_slot_write(slot, fs_files[slot].pos, buf, count);
-    if (n > 0) fs_files[slot].pos += (uint32_t)n;
-    return n;
-}
-
-int fs_close(int fd) {
-    int slot = fd - FS_SLOT_FIRST;
-    if (slot < 0 || slot >= FS_MAX_FILES) return -1;
-    fs_slot_release(slot);
-    fs_files[slot].pos = 0;
-    return 0;
-}
-
-int fs_seek(int fd, uint32_t pos) {
-    int slot = fd - FS_SLOT_FIRST;
-    if (slot < 0 || slot >= FS_MAX_FILES || !fs_files[slot].used) return -1;
-    if (pos > fs_files[slot].size) return -1;
-    fs_files[slot].pos = pos;
-    return 0;
-}
-
 int fs_delete(const char* name) {
     int slot = fs_find_slot(name);
     if (slot < 0) return -1;
@@ -490,20 +474,6 @@ int fs_delete(const char* name) {
     f->deleted = 1;
     if (f->open_refs == 0) fs_reclaim_deleted(slot);
     fs_persist_dir();
-    return 0;
-}
-
-int fs_file_size(int fd) {
-    int slot = fd - FS_SLOT_FIRST;
-    if (slot < 0 || slot >= FS_MAX_FILES) return -1;
-    return fs_slot_size(slot);
-}
-
-int fs_truncate(int fd) {
-    int slot = fd - FS_SLOT_FIRST;
-    if (slot < 0 || slot >= FS_MAX_FILES) return -1;
-    if (fs_slot_truncate(slot) < 0) return -1;
-    fs_files[slot].pos = 0;
     return 0;
 }
 

@@ -28,7 +28,8 @@ echo [3/3] QEMU boot + shell command test
 python tools\boot_test.py --timeout 30 --settle 1 --expect "arc> " ^
     --expect "ARC OS Commands:" --expect "runtime.txt" ^
     --expect "Process exited" --expect "beta" ^
-    --expect-not "alphabeta" --input "help" --input "clear" ^
+    --expect-not "alphabeta" --expect-not "betaa" ^
+    --input "help" --input "clear" ^
     --input "touch runtime.txt" --input "ls" ^
     --input "echo alpha to fdtest.txt" ^
     --input "echo beta to fdtest.txt" --input "cat fdtest.txt" ^

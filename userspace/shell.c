@@ -17,6 +17,12 @@
 #define SYS_RENAME 11
 #define SYS_CLEAR 12
 
+/* Open flags (must match kernel.h) */
+#define O_RDONLY 0x0000
+#define O_WRONLY 0x0001
+#define O_CREAT  0x0100
+#define O_TRUNC  0x0200
+
 #define STDIN  0
 #define STDOUT 1
 #define FS_FD0 3
@@ -137,7 +143,8 @@ static void run_command(const char* cmd) {
             while (ti > 0 && (text[ti - 1] == ' ')) ti--;
             text[ti] = '\0';
 
-            long fd = syscall4(SYS_OPEN, (long)fname, 1, 0);
+            long fd = syscall4(SYS_OPEN, (long)fname,
+                               O_WRONLY | O_CREAT | O_TRUNC, 0);
             if (fd < FS_FD0) {
                 print_str("echo: cannot create ");
                 print_str(fname);
@@ -163,7 +170,7 @@ static void run_command(const char* cmd) {
             print_str("usage: cat <file>\n");
             return;
         }
-        long fd = syscall4(SYS_OPEN, (long)fname, 0, 0);
+        long fd = syscall4(SYS_OPEN, (long)fname, O_RDONLY, 0);
         if (fd < FS_FD0) {
             print_str("cat: no such file: ");
             print_str(fname);
@@ -171,9 +178,11 @@ static void run_command(const char* cmd) {
             return;
         }
         char chunk[128];
+        char last = '\n';
         for (;;) {
             long n = syscall4(SYS_READ, fd, (long)&chunk[0], (long)sizeof(chunk));
             if (n <= 0) break;
+            last = chunk[n - 1];
             long k = 0;
             while (k < n) {
                 long w = syscall4(SYS_WRITE, STDOUT, (long)&chunk[k], n - k);
@@ -182,6 +191,7 @@ static void run_command(const char* cmd) {
             }
         }
         syscall4(SYS_CLOSE, fd, 0, 0);
+        if (last != '\n') print_newline();
         return;
     }
 
@@ -206,7 +216,7 @@ static void run_command(const char* cmd) {
             print_str("usage: touch <file>\n");
             return;
         }
-        long fd = syscall4(SYS_OPEN, (long)fname, 1, 0);
+        long fd = syscall4(SYS_OPEN, (long)fname, O_WRONLY | O_CREAT, 0);
         if (fd < FS_FD0) {
             print_str("touch: cannot create ");
             print_str(fname);
@@ -223,7 +233,7 @@ static void run_command(const char* cmd) {
             print_str("usage: truncate <file>\n");
             return;
         }
-        long fd = syscall4(SYS_OPEN, (long)fname, 0, 0);
+        long fd = syscall4(SYS_OPEN, (long)fname, O_WRONLY, 0);
         if (fd < FS_FD0) {
             print_str("truncate: no such file: ");
             print_str(fname);
@@ -258,14 +268,15 @@ static void run_command(const char* cmd) {
         for (long i = 0; i < s2len; i++) dst[i] = s2[i];
         dst[s2len] = '\0';
 
-        long sr = syscall4(SYS_OPEN, (long)src, 0, 0);
+        long sr = syscall4(SYS_OPEN, (long)src, O_RDONLY, 0);
         if (sr < FS_FD0) {
             print_str("cp: no such file: ");
             print_str(src);
             print_newline();
             return;
         }
-        long dr = syscall4(SYS_OPEN, (long)dst, 1, 0);
+        long dr = syscall4(SYS_OPEN, (long)dst,
+                           O_WRONLY | O_CREAT | O_TRUNC, 0);
         if (dr < FS_FD0) {
             print_str("cp: cannot create ");
             print_str(dst);
@@ -273,7 +284,6 @@ static void run_command(const char* cmd) {
             syscall4(SYS_CLOSE, sr, 0, 0);
             return;
         }
-        syscall4(SYS_TRUNC, dr, 0, 0);   /* overwrite semantics */
         char cp_buf[256];
         for (;;) {
             long n = syscall4(SYS_READ, sr, (long)&cp_buf[0], (long)sizeof(cp_buf));
