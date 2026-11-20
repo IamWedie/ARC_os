@@ -63,6 +63,35 @@ void vmm_map_page(uint64_t vaddr, uint64_t paddr, uint8_t flags);
 void vmm_unmap_page(uint64_t vaddr);
 void vmm_create_user_mapping(uint64_t vaddr, uint64_t paddr, size_t pages);
 
+/*
+ * Page-table walk core (pagetable.c).
+ *
+ * Pure logic over identity-accessible memory: no CR3 load, no INVLPG, and no
+ * implicit PMM use, so host tests can link it directly. ops->alloc must
+ * return one zeroed 4 KiB page (or NULL); ops->free releases such a page.
+ */
+#define PT_PG_PRESENT (1ULL << 0)
+#define PT_PG_RW      (1ULL << 1)
+#define PT_PG_USER    (1ULL << 2)
+#define PT_PG_PSE     (1ULL << 7)
+
+/*
+ * PML4 slot at which the kernel half begins (x86-64 canonical split at bit
+ * 47): pt_count_user_pages() counts present 4 KiB leaves in slots below it.
+ */
+#define PT_USER_SLOT_FIRST 256
+
+typedef struct {
+    void* (*alloc)(void);
+    void (*free)(void* page);
+} pt_ops_t;
+
+int pt_map(uint64_t* root, uint64_t vaddr, uint64_t paddr, uint64_t flags,
+           const pt_ops_t* ops);
+uint64_t* pt_lookup(uint64_t* root, uint64_t vaddr);
+int pt_unmap(uint64_t* root, uint64_t vaddr);
+int pt_count_user_pages(const uint64_t* root);
+
 /* Heap (memory.c) */
 void* kmalloc(size_t size);
 void kfree(void* ptr);
