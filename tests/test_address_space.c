@@ -12,14 +12,7 @@
 #undef SYS_OPEN /* MinGW stdio uses this name for _SYS_OPEN */
 #include "kernel.h"
 
-/* Service under test (not in kernel.h until its kernel callers land). */
-extern int as_create(int pid);
-extern int as_map_user(int pid, uint64_t vaddr, uint64_t paddr,
-                       size_t pages, uint8_t flags);
-extern void as_destroy(int pid);
-extern uint64_t as_root(int pid);
-
-/* Host stubs / introspection. */
+/* Host stubs / introspection (service API comes from kernel.h). */
 extern void pmm_stub_reset(void);
 extern uint64_t pmm_stub_used_pages(void);
 

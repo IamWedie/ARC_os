@@ -66,6 +66,13 @@ uint64_t vmm_master_root(void);
 void vmm_invalidate_page(uint64_t vaddr);
 void vmm_switch_address_space(int pid);
 
+/* Per-process address spaces (address_space.c) */
+int  as_create(int pid);
+int  as_map_user(int pid, uint64_t vaddr, uint64_t paddr,
+                 size_t pages, uint8_t flags);
+void as_destroy(int pid);
+uint64_t as_root(int pid);
+
 /*
  * Page-table walk core (pagetable.c).
  *
