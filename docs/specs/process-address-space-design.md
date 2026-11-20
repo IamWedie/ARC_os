@@ -126,7 +126,7 @@ typedef struct {
 
 /* kernel/pagetable.c — pure, no asm, no PMM dependency */
 int      pt_map(uint64_t* root, uint64_t vaddr, uint64_t paddr,
-                uint8_t flags, const pt_ops_t* ops);
+                uint64_t flags, const pt_ops_t* ops);
 uint64_t* pt_lookup(uint64_t* root, uint64_t vaddr);
 int      pt_unmap(uint64_t* root, uint64_t vaddr);
 void     pt_clone_shared(uint64_t* src, uint64_t* dst);
