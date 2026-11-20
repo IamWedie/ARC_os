@@ -85,6 +85,44 @@ int pt_unmap(uint64_t* root, uint64_t vaddr) {
 }
 
 /*
+ * Free every table reachable from `table[first..511]`, then unlink each entry.
+ * level 0 = PML4, 1 = PDPT, 2 = PD: a PD's children are page tables whose
+ * entries are mapped pages, so recursion stops before those leaves. Large-page
+ * entries are mappings, not tables, and are left alone.
+ */
+static void pt_free_children(uint64_t* table, int first, int level,
+                             const pt_ops_t* ops) {
+    for (int i = first; i < 512; i++) {
+        uint64_t entry = table[i];
+        if (!(entry & PT_PG_PRESENT) || (entry & PT_PG_PSE)) continue;
+        uint64_t* child = pt_table(entry);
+        if (!child) continue;
+
+        if (level < 2) pt_free_children(child, 0, level + 1, ops);
+
+        table[i] = 0; /* unlink before free: a second teardown sees nothing */
+        ops->free(child);
+    }
+}
+
+void pt_clone_shared(uint64_t* src, uint64_t* dst) {
+    if (!src || !dst) return;
+
+    dst[0] = src[0];
+    for (int i = PT_USER_SLOT_FIRST; i < 512; i++) dst[i] = 0;
+}
+
+/*
+ * Reclaim the private tables of a process root without touching the root or
+ * the shared kernel slot 0. Zeroing on the way down also makes repeated calls
+ * harmless even if the allocator does not clear freed pages.
+ */
+void pt_free_user_tables(uint64_t* root, const pt_ops_t* ops) {
+    if (!root || !ops || !ops->free) return;
+    pt_free_children(root, PT_USER_SLOT_FIRST, 0, ops);
+}
+
+/*
  * Count the 4 KiB leaves mapped in the private (user) half of `root`. PML4
  * slot 0 is the shared kernel identity map and is never counted; large pages
  * are mappings of their own, not leaves, so they are not counted either.

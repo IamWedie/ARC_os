@@ -71,3 +71,8 @@ void pt_stub_reset(void) {
     frees = 0;
     fail_after = -1;
 }
+
+/* Clear only the free ledger: the arena and its tables stay untouched. */
+void pt_stub_reset_freed_count(void) {
+    frees = 0;
+}

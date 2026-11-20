@@ -92,6 +92,8 @@ int pt_map(uint64_t* root, uint64_t vaddr, uint64_t paddr, uint64_t flags,
            const pt_ops_t* ops);
 uint64_t* pt_lookup(uint64_t* root, uint64_t vaddr);
 int pt_unmap(uint64_t* root, uint64_t vaddr);
+void pt_clone_shared(uint64_t* src, uint64_t* dst);
+void pt_free_user_tables(uint64_t* root, const pt_ops_t* ops);
 int pt_count_user_pages(const uint64_t* root);
 
 /* Heap (memory.c) */

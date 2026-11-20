@@ -17,6 +17,7 @@ extern uint64_t* pt_stub_root(void);
 extern void pt_stub_fail_after(int n);
 extern int pt_stub_alloc_count(void);
 extern int pt_stub_freed_count(void);
+extern void pt_stub_reset_freed_count(void);
 extern pt_ops_t pt_stub_ops;
 
 static int tests_passed;
@@ -131,6 +132,112 @@ static void test_alloc_failure(void) {
     CHECK(pt_count_user_pages(root) == 1, "page count != 1");
 }
 
+static void test_clone_shared(void) {
+    printf("\n=== Test 7: clone shares only the kernel slot ===\n");
+    pt_stub_reset();
+    uint64_t* master = pt_stub_root();
+    uint64_t* child = (uint64_t*)pt_stub_ops.alloc();
+    CHECK(child != NULL, "child root allocation failed");
+    if (!child) return;
+
+    /* master slot 0 = 0xABC000|PT_PG_PRESENT|PT_PG_RW; slot 1 = sentinel */
+    master[0] = 0xABC000ULL | PT_PG_PRESENT | PT_PG_RW;
+    master[PT_USER_SLOT_FIRST] = 0xDEF000ULL | PT_PG_PRESENT | PT_PG_USER;
+    master[2] = 0xFEE000ULL | PT_PG_PRESENT;
+
+    pt_clone_shared(master, child);
+    CHECK(child[0] == master[0], "kernel slot not shared");
+    CHECK(child[PT_USER_SLOT_FIRST] == 0, "user slot copied");
+    CHECK(child[2] == 0, "unused slot copied");
+    CHECK(pt_stub_alloc_count() == 1, "clone allocated a table");
+}
+
+static void test_isolation(void) {
+    printf("\n=== Test 8: cloned roots have private user leaves ===\n");
+    pt_stub_reset();
+    uint64_t* master = pt_stub_root();
+    master[0] = 0xABC000ULL | PT_PG_PRESENT | PT_PG_RW;
+
+    /* two roots cloned from the same master; map different paddr at USER_CODE_VA */
+    uint64_t* a = (uint64_t*)pt_stub_ops.alloc();
+    uint64_t* b = (uint64_t*)pt_stub_ops.alloc();
+    CHECK(a != NULL && b != NULL, "root allocation failed");
+    if (!a || !b) return;
+
+    pt_clone_shared(master, a);
+    pt_clone_shared(master, b);
+    CHECK(pt_map(a, USER_CODE_VA, 0x1000000,
+                 PT_PG_USER | PT_PG_RW, &pt_stub_ops) == 0,
+          "map in root A failed");
+    CHECK(pt_map(b, USER_CODE_VA, 0x2000000,
+                 PT_PG_USER | PT_PG_RW, &pt_stub_ops) == 0,
+          "map in root B failed");
+
+    uint64_t* leaf_a = pt_lookup(a, USER_CODE_VA);
+    uint64_t* leaf_b = pt_lookup(b, USER_CODE_VA);
+    CHECK(leaf_a != NULL && leaf_b != NULL, "user leaf missing after map");
+    if (!leaf_a || !leaf_b) return;
+    CHECK(*pt_lookup(a, USER_CODE_VA) != *pt_lookup(b, USER_CODE_VA),
+          "processes share a leaf");
+    CHECK(a[0] == master[0] && b[0] == master[0], "kernel slot not shared");
+    CHECK(a[PT_USER_SLOT_FIRST] != b[PT_USER_SLOT_FIRST],
+          "private PDPT shared");
+}
+
+static void test_free_user_tables(void) {
+    printf("\n=== Test 9: teardown frees exactly five private tables ===\n");
+    pt_stub_reset();
+    uint64_t* master = pt_stub_root();
+    master[0] = 0xABC000ULL | PT_PG_PRESENT | PT_PG_RW;
+
+    /* USER_CODE_VA and USER_STACK_VA are both slot 1 but different PDPT indices:
+       1 PDPT + 2 PD + 2 PT = 5 private tables. Clone slot 0 from master. */
+    uint64_t* root = (uint64_t*)pt_stub_ops.alloc();
+    CHECK(root != NULL, "root allocation failed");
+    if (!root) return;
+
+    pt_clone_shared(master, root);
+    CHECK(pt_map(root, USER_CODE_VA, 0x1000000,
+                 PT_PG_USER | PT_PG_RW, &pt_stub_ops) == 0,
+          "code map failed");
+    CHECK(pt_map(root, USER_STACK_VA, 0x2000000,
+                 PT_PG_USER | PT_PG_RW, &pt_stub_ops) == 0,
+          "stack map failed");
+    CHECK(pt_stub_alloc_count() == 6, "expected root + 5 tables, got %d",
+          pt_stub_alloc_count());
+    CHECK(pt_count_user_pages(root) == 2, "setup mapped %d pages",
+          pt_count_user_pages(root));
+
+    pt_free_user_tables(root, &pt_stub_ops);
+    CHECK(pt_stub_freed_count() == 5, "expected 5 private tables, got %d",
+          pt_stub_freed_count());
+    CHECK(root[0] == master[0], "shared slot cleared");
+    CHECK(pt_count_user_pages(root) == 0, "user leaves remain");
+}
+
+static void test_free_idempotent(void) {
+    printf("\n=== Test 10: repeated teardown frees nothing ===\n");
+    pt_stub_reset();
+    uint64_t* master = pt_stub_root();
+    master[0] = 0xABC000ULL | PT_PG_PRESENT | PT_PG_RW;
+    uint64_t* root = (uint64_t*)pt_stub_ops.alloc();
+    CHECK(root != NULL, "root allocation failed");
+    if (!root) return;
+
+    pt_clone_shared(master, root);
+    CHECK(pt_map(root, USER_CODE_VA, 0x1000000,
+                 PT_PG_USER | PT_PG_RW, &pt_stub_ops) == 0,
+          "setup map failed");
+    pt_free_user_tables(root, &pt_stub_ops);
+    CHECK(pt_stub_freed_count() == 3, "first teardown freed %d tables",
+          pt_stub_freed_count());
+
+    /* Ledger only: root and its (now unlinked) tables stay as they are. */
+    pt_stub_reset_freed_count();
+    pt_free_user_tables(root, &pt_stub_ops);
+    CHECK(pt_stub_freed_count() == 0, "second free released pages");
+}
+
 int main(void) {
     printf("ARC OS page-table core test (real kernel/pagetable.c)\n");
 
@@ -140,6 +247,10 @@ int main(void) {
     test_unmap();
     test_large_page_refused();
     test_alloc_failure();
+    test_clone_shared();
+    test_isolation();
+    test_free_user_tables();
+    test_free_idempotent();
 
     printf("\n=== Results ===\n");
     printf("  passed: %d\n", tests_passed);
