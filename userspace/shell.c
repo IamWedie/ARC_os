@@ -16,6 +16,8 @@
 #define SYS_TRUNC 10
 #define SYS_RENAME 11
 #define SYS_CLEAR 12
+#define SYS_FORK 14
+#define SYS_WAIT 15
 
 /* Open flags (must match kernel.h) */
 #define O_RDONLY 0x0000
@@ -59,6 +61,9 @@ static long syscall4(long n, long a1, long a2, long a3) {
     return ret;
 }
 
+static long sys_fork(void) { return syscall4(14, 0, 0, 0); }
+static long sys_wait(int* s) { return syscall4(15, (long)s, 0, 0); }
+
 static void print_str(const char* s) {
     long len = 0;
     while (s[len]) len++;
@@ -89,12 +94,30 @@ static void run_command(const char* cmd) {
         print_str("  mv <src> <dst>      - Move/rename a file\n");
         print_str("  truncate <file>     - Empty a file\n");
         print_str("  rm <file>           - Delete a file\n");
+        print_str("  forktest            - Prove fork/wait with a child\n");
         print_str("  exit                - Exit shell\n");
         return;
     }
 
     if (starts_with(cmd, "clear")) {
         syscall4(SYS_CLEAR, 0, 0, 0);
+        return;
+    }
+
+    if (starts_with(cmd, "forktest")) {
+        print_str("fork: parent\n");
+        long pid = sys_fork();
+        if (pid == 0) {
+            print_str("fork: child ok\n");
+            syscall4(SYS_EXIT, 7, 0, 0);
+            return;
+        }
+        int status = -1;
+        sys_wait(&status);
+        if (status == 7)
+            print_str("fork: wait ok\n");
+        else
+            print_str("fork: wait bad\n");
         return;
     }
 
