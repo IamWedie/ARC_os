@@ -7,11 +7,12 @@
  * flags, and a reference count; fds in one or more processes can point at the
  * same OFD.
  *
- * Slot references follow fds, not OFDs: fs_open_slot() resolves or creates the
- * file without taking a reference, every installed descriptor calls
- * fs_slot_add_ref() once, and closing a descriptor calls fs_slot_release()
- * once. That keeps the backend's open_refs equal to the number of open
- * descriptors, which is exactly what deferred unlink needs.
+ * Slot references follow OFDs, not fds: fs_open_slot() resolves or creates the
+ * file without taking a reference, fd_open() acquires exactly one reference
+ * for the new OFD, and fd_dup()/fd_clone_process() only bump the OFD refcount.
+ * The slot reference is released exactly once, when the last fd pointing at
+ * the OFD closes. That keeps the backend's open_refs equal to the number of
+ * open file descriptions, which is what deferred unlink requires.
  *
  * No function here allocates memory: both tables have fixed bounds.
  */
@@ -38,15 +39,16 @@ static open_file_t* fd_entry_ofd(const fd_entry_t* entry) {
 }
 
 /*
- * Drop the slot reference held by one descriptor and clear the entry. The
- * final reference also retires the OFD so its index can be reused.
+ * Drop the OFD reference held by one descriptor and clear the entry. Only the
+ * final descriptor releases the OFD's single file-slot reference; the OFD
+ * index is then reusable.
  */
 static void fd_release_entry(fd_entry_t* entry) {
     open_file_t* ofd = fd_entry_ofd(entry);
     if (ofd) {
-        fs_slot_release(ofd->file_slot);
         if (ofd->refs > 0) ofd->refs--;
         if (ofd->refs == 0) {
+            fs_slot_release(ofd->file_slot);
             ofd->used = 0;
             ofd->file_slot = -1;
             ofd->offset = 0;
@@ -135,7 +137,7 @@ int fd_dup(int pid, int oldfd) {
 
     open_file_t* ofd = fd_entry_ofd(old);
     if (old->kind == FD_ENTRY_FILE) {
-        if (!ofd || fs_slot_add_ref(ofd->file_slot) < 0) return -1;
+        if (!ofd) return -1;
         ofd->refs++;
     }
 
@@ -164,7 +166,7 @@ int fd_clone_process(const process_t* parent, process_t* child) {
         const fd_entry_t* src = &parent->fds[fd];
         if (src->kind == FD_ENTRY_FILE) {
             open_file_t* ofd = fd_entry_ofd(src);
-            if (!ofd || fs_slot_add_ref(ofd->file_slot) < 0) {
+            if (!ofd) {
                 fd_close_all(child);
                 return -1;
             }

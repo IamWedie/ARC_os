@@ -138,8 +138,12 @@ static void test_dup_shares_offset(void) {
         CHECK(fd_write(1, a, "0123456789", 10) == 10, "initial write failed");
         CHECK(fd_seek(1, a, 2, SEEK_SET) == 2, "seek to 2 failed");
 
+        unsigned before = fd_stub_add_ref_calls();
         int d = fd_dup(1, a);
         CHECK(d >= 0, "dup failed");
+        CHECK(fd_stub_add_ref_calls() == before,
+              "dup acquired %u slot refs, expected 0",
+              fd_stub_add_ref_calls() - before);
         CHECK(d != a, "dup returned the original fd %d", d);
         if (d >= 0) {
             CHECK(processes[1].fds[d].ofd == processes[1].fds[a].ofd,
@@ -293,8 +297,8 @@ static void test_clone_process(void) {
         unsigned before = fd_stub_add_ref_calls();
         CHECK(fd_clone_process(&processes[1], &processes[2]) == 0,
               "fd_clone_process failed");
-        CHECK(fd_stub_add_ref_calls() - before == 1,
-              "clone called fs_slot_add_ref %u times",
+        CHECK(fd_stub_add_ref_calls() == before,
+              "clone acquired %u slot refs, expected 0",
               fd_stub_add_ref_calls() - before);
         CHECK(processes[2].fds[a].kind == FD_ENTRY_FILE,
               "child fd %d kind = %d", a, processes[2].fds[a].kind);

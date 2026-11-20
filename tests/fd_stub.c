@@ -8,9 +8,10 @@
  *
  * The fake slots mirror the contract the real backend provides:
  * fs_open_slot() resolves or creates a slot WITHOUT taking a reference. The
- * fd layer calls fs_slot_add_ref() once per descriptor it installs and
- * fs_slot_release() once per descriptor it closes. A deleted slot keeps its
- * data until its last reference is dropped.
+ * fd layer acquires exactly one reference per open file description and
+ * releases it when the OFD's last descriptor closes; dup/clone only bump the
+ * OFD refcount. A deleted slot keeps its data until its last reference is
+ * dropped.
  */
 #include <stddef.h>
 #include <string.h>
