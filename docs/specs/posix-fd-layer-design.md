@@ -6,19 +6,19 @@
 
 ## Intent and the why
 
-ARC OS currently exposes file descriptors that are just `FS_SLOT_FIRST + slot`.
-The read/write position lives on the shared `fs_file_t`, so two opens of the
-same file share one cursor. `fs_close()` only resets that cursor; it does not
-close a descriptor. There is no per-process descriptor table, no access-mode
-checking, and no close-on-exit.
+Before this slice, ARC OS exposed file descriptors that were just
+`FS_SLOT_FIRST + slot`. The read/write position lived on the shared `fs_file_t`,
+so two opens of the same file shared one cursor. `fs_close()` only reset that
+cursor; it did not close a descriptor. There was no per-process descriptor
+table, no access-mode checking, and no close-on-exit.
 
-This is acceptable for a one-process demo but blocks the stated goal of a
+That was acceptable for a one-process demo but blocked the stated goal of a
 real POSIX-compatible OS. `fork` must give the child its own descriptor table
 while preserving shared open file descriptions where POSIX requires it. `dup`
 must share an offset. Deleting an open file must not leave a descriptor pointing
 at blocks that have already been recycled.
 
-The goal of this slice is to establish that model **before** `fork`/`exec`
+The goal of this slice was to establish that model **before** `fork`/`exec`
 exists, so later work inherits correct semantics instead of rewriting them.
 
 ## Goals
@@ -53,24 +53,26 @@ exists, so later work inherits correct semantics instead of rewriting them.
 ## Constraints
 
 - Freestanding C11, Zig 0.16 cross-build, no SSE/MMX in kernel code.
-- `kernel/fs.c` currently persists `fs_file_t` directly to disk; adding fields
-  requires bumping `FS_DISK_VERSION` to 2 and reformatting older images.
-- The ring-3 shell passes `create` as syscall argument 2 today. The ABI change
-  to flags requires updating every `SYS_OPEN` call in `userspace/shell.c`.
+- Before this slice, `kernel/fs.c` persisted `fs_file_t` directly to disk;
+  adding fields required bumping `FS_DISK_VERSION` to 2 and reformatting older
+  images.
+- Before this slice, the ring-3 shell passed `create` as syscall argument 2; the
+  ABI change to flags required updating every `SYS_OPEN` call in
+  `userspace/shell.c`.
 - Host tests must link real kernel logic with stubs, as the slab/scheduler
   suites already do.
 - Quality gate is `cmd /c tests\run_all.bat`: host tests → build → TCP-serial
   QEMU shell session.
 
-## Current state (what this change touches)
+## Pre-implementation state (what this change touched)
 
 - `kernel/kernel.h` — `process_t`, syscall numbers, `fs_file_t`.
 - `kernel/fs.c` — slot lookup, extent allocation, file metadata.
-- `kernel/syscall.c` — currently routes fd ≥ 3 directly to `fs_*`.
+- `kernel/syscall.c` — routed fd ≥ 3 directly to `fs_*` before this slice.
 - `kernel/scheduler.c` / `kernel/user.c` — process creation point where std fds
-  must be installed; reaping point where fds must be closed.
+  had to be installed; reaping point where fds had to be closed.
 - `userspace/shell.c` — all `SYS_OPEN` call sites.
-- `tests/` — new fd suite and runner steps.
+- `tests/` — new fd suite and runner steps added by this slice.
 
 ## Approaches considered
 
@@ -79,7 +81,7 @@ exists, so later work inherits correct semantics instead of rewriting them.
 Keep one descriptor table for the whole kernel and add independent offsets and
 refcounts there.
 
-- **Trade-off:** smallest diff, fixes the shared-offset bug today.
+- **Trade-off:** smallest diff; would have fixed the shared-offset bug.
 - **Problem:** `fork` cannot give parent and child distinct descriptor tables.
   We would have to add per-process ownership later, changing the ABI and every
   descriptor reference again.
@@ -89,7 +91,7 @@ refcounts there.
 Give every `process_t` an fd array and store `file_slot + offset + flags` in
 each entry.
 
-- **Trade-off:** fixes today's bug and closes fds on exit.
+- **Trade-off:** would have fixed the shared-offset bug and closed fds on exit.
 - **Problem:** `dup()` and `fork()` should share one open file description and
   therefore one offset. This model would either make them wrong or require a
   structural rewrite later.
