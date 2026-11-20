@@ -85,14 +85,15 @@ int pt_unmap(uint64_t* root, uint64_t vaddr) {
 }
 
 /*
- * Count the 4 KiB leaves mapped in the user half of `root`. Large pages are
- * mappings of their own, not leaves, so they are not counted.
+ * Count the 4 KiB leaves mapped in the private (user) half of `root`. PML4
+ * slot 0 is the shared kernel identity map and is never counted; large pages
+ * are mappings of their own, not leaves, so they are not counted either.
  */
 int pt_count_user_pages(const uint64_t* root) {
     if (!root) return 0;
 
     int pages = 0;
-    for (int i = 0; i < PT_USER_SLOT_FIRST; i++) {
+    for (int i = PT_USER_SLOT_FIRST; i < 512; i++) {
         uint64_t pml4e = root[i];
         if (!(pml4e & PT_PG_PRESENT) || (pml4e & PT_PG_PSE)) continue;
         const uint64_t* pdpt =

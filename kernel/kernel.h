@@ -76,10 +76,12 @@ void vmm_create_user_mapping(uint64_t vaddr, uint64_t paddr, size_t pages);
 #define PT_PG_PSE     (1ULL << 7)
 
 /*
- * PML4 slot at which the kernel half begins (x86-64 canonical split at bit
- * 47): pt_count_user_pages() counts present 4 KiB leaves in slots below it.
+ * First private (user) PML4 slot. Only slot 0 is shared kernel: the master
+ * root's identity map lives there. Both user VAs (0x8000000000 and
+ * 0x9000000000) are PML4 slot 1; slot 256 would start at 2^47.
+ * pt_count_user_pages() counts present 4 KiB leaves in slots at or above it.
  */
-#define PT_USER_SLOT_FIRST 256
+#define PT_USER_SLOT_FIRST 1
 
 typedef struct {
     void* (*alloc)(void);

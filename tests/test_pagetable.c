@@ -62,8 +62,21 @@ static void test_intermediate_reuse(void) {
     CHECK(pt_count_user_pages(root) == 2, "page count != 2");
 }
 
+static void test_kernel_slot_not_counted(void) {
+    printf("\n=== Test 3: shared kernel slot is not a user page ===\n");
+    pt_stub_reset();
+    uint64_t* root = pt_stub_root();
+    CHECK(pt_map(root, 0x200000, 0x200000, PT_PG_RW, &pt_stub_ops) == 0,
+          "kernel map failed");
+    CHECK(pt_lookup(root, 0x200000) != NULL, "kernel leaf missing");
+    CHECK(pt_count_user_pages(root) == 0, "kernel page counted as user");
+    CHECK(pt_map(root, USER_CODE_VA, 0x1000000,
+                 PT_PG_USER | PT_PG_RW, &pt_stub_ops) == 0, "user map failed");
+    CHECK(pt_count_user_pages(root) == 1, "user page count != 1");
+}
+
 static void test_unmap(void) {
-    printf("\n=== Test 3: unmap clears the leaf ===\n");
+    printf("\n=== Test 4: unmap clears the leaf ===\n");
     pt_stub_reset();
     uint64_t* root = pt_stub_root();
     CHECK(pt_map(root, USER_CODE_VA, 0x1000000,
@@ -81,7 +94,7 @@ static void test_unmap(void) {
 }
 
 static void test_large_page_refused(void) {
-    printf("\n=== Test 4: existing large page is refused ===\n");
+    printf("\n=== Test 5: existing large page is refused ===\n");
     pt_stub_reset();
     uint64_t* root = pt_stub_root();
     CHECK(pt_map(root, USER_CODE_VA, 0x1000000,
@@ -102,7 +115,7 @@ static void test_large_page_refused(void) {
 }
 
 static void test_alloc_failure(void) {
-    printf("\n=== Test 5: allocation failure leaves a usable root ===\n");
+    printf("\n=== Test 6: allocation failure leaves a usable root ===\n");
     pt_stub_reset();
     uint64_t* root = pt_stub_root();
     pt_stub_fail_after(2);                       /* third allocation fails */
@@ -119,6 +132,7 @@ int main(void) {
 
     test_map_and_lookup();
     test_intermediate_reuse();
+    test_kernel_slot_not_counted();
     test_unmap();
     test_large_page_refused();
     test_alloc_failure();
