@@ -36,7 +36,9 @@ address spaces are a separate later slice.
 
 ## Non-goals
 
-- Automatic reaping / `wait()` (zombies still need an explicit `reap()` call).
+- Automatic reaping / `wait()` at the time this slice landed; the idle-loop
+  reaper was completed separately in `docs/specs/automatic-zombie-reaping.md`.
+  Parent-aware `wait()` is still out of scope.
 - Per-process page tables, ASID/CR3 switching, or COW.
 - `fork`/`exec`, POSIX fd semantics, FAT32, persistence.
 

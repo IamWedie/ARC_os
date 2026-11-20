@@ -69,8 +69,9 @@ void kernel_main(uint64_t multiboot_addr) {
      */
     scheduler_yield();
 
-    /* Process 0 (kernel) becomes the idle loop. */
+    /* Process 0 (kernel) becomes the idle loop and resource reaper. */
     while (1) {
+        scheduler_reap_zombies();
         __asm__ volatile("hlt");
     }
 }

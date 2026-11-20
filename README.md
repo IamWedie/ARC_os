@@ -105,7 +105,7 @@ This project is an educational exploration of OS internals. No existing operatin
 - Physical + virtual memory — multiboot memory map, 2 MiB identity map, 4 KiB page mapping
 - Slab heap — 12 size classes (16 B–32 KiB), PMM fallback for large allocations
 - Ring-3 user shell — loaded from an embedded blob and entered via `iretq`
-- Owned process frames — user code/stack runs are tracked per process and freed on reap
+- Owned process frames — user code/stack runs are tracked per process and freed automatically by the idle reaper
 - System call gate — `int 0x80` for write, read, exit, open, close, ls, delete, seek, size, truncate, rename, clear
 - RAM-backed filesystem — file metadata plus a block arena
 - Build pipeline — Zig/lld + GNU objcopy, no MSYS2 shell required

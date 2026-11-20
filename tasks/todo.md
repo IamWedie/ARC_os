@@ -53,6 +53,14 @@
       frees them. `kernel/user.c` uses the API and brackets process setup with
       preemption disabled so a timer tick cannot schedule a half-mapped process.
       Host: 318 scheduler checks (up from 251), 0 failures; full gate green.
+- [x] Automatic zombie reaping (idle reaper) ✅
+  - Acceptance: `scheduler_reap_zombies()` reaps every zombie except the current
+    process; process 0's idle loop calls it; an exited process's kernel stack and
+    owned user frames return to the PMM without an explicit per-pid reap.
+  - Verify: RED test failed before the API existed; GREEN host run 343 checks,
+    0 failures; full gate green including `exit` and `BOOT OK`.
+  - Files: `kernel/kernel.h`, `kernel/scheduler.c`, `kernel/kernel.c`,
+    `tests/test_scheduler.c`, `docs/specs/automatic-zombie-reaping.md`.
 - [ ] FAT32 driver with cache integration
 - [ ] fork/exec/wait implementation
 - [ ] /proc filesystem for process introspection

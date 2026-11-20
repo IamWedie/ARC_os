@@ -89,6 +89,7 @@ PMM (physical frames)
 | **Preemptive MLFQ scheduler** | ✅ 4 levels, O(1) FIFO ring queues, 10-tick quantum, 100-tick boost | `kernel/scheduler.c`; 251 host checks, 0 failures |
 | **Process lifecycle** | ✅ `FREE/READY/RUNNING/IDLE/BLOCKED/ZOMBIE`; block/wake/kill/reap; stats; invariant checker | `tests/test_scheduler.c` |
 | **Process resource ownership** | ✅ `process_t.owned[]` + atomic `process_alloc_owned_frames()`; `scheduler_reap()` frees user code/stack runs; loader setup is non-preemptible | 318 scheduler checks, 0 failures; full gate green; 5/5 repeated boots |
+| **Automatic zombie reaping** | ✅ `scheduler_reap_zombies()` called from PID 0's idle loop; no explicit per-pid reap needed at runtime | 343 scheduler checks, 0 failures; full gate green |
 | **Software yield** | ✅ `scheduler_yield()` raises vector `0x81`; same stack-swap contract as timer stubs | `kernel/isr.S`, `kernel/scheduler.c` |
 | **Idle cannot starve work** | ✅ PID 0 is `PROC_IDLE`, never queued; it runs only when no real process is ready | host test “idle is a fallback, not a peer”; invariant rejects PID 0 in a queue |
 | **`SYS_EXIT` terminates** | ✅ Prints `[Process exited]`, parks the caller as a zombie, returns to idle | interactive QEMU test |
@@ -102,7 +103,7 @@ PMM (physical frames)
 
 ### ❌ Still Missing
 
-- Automatic reaping / `wait()`: an exited process stays a zombie until something calls `scheduler_reap()`. User frames are already owned and would be freed by that call.
+- Automatic reaping (idle reaper): ✅ process 0's idle loop now reaps zombies and frees their owned frames. Parent-aware `wait()` is still missing.
 - `fork`/`exec`/`wait` and a POSIX file-descriptor table (the current fd namespace is the FS slot index).
 - FAT32 and on-disk filesystems: the kernel has an ATA PIO driver but only a RAM-backed FS.
 - Demand paging, copy-on-write, and recoverable page faults.
@@ -116,7 +117,7 @@ PMM (physical frames)
 | SSE/MMX disabled until the context switch saves XMM state | Moderate – no FP in kernel; enabling SSE needs FXSAVE | keep the build guard; add FXSAVE before enabling SSE |
 | User frames leak when a process exits | Resolved – `owned[]` frames are freed on reap | keep the atomic alloc+attach API for new resource types |
 | Loader publish window | Low today – `preempt_disable()` keeps a half-mapped process off the CPU | use an explicit deferred-start API if setup grows beyond a few steps |
-| Zombies need an explicit reap; no `wait()` | Moderate – exited children occupy process slots | add a reaper/wait path |
+| Zombies need an explicit reap; no `wait()` | Resolved for resource leaks | idle-loop reaper frees frames immediately; parent-aware `wait()` waits for fork/exec |
 | `scheduler_boost()` rebuilds all queues | Low today – bounded by `MAX_PROCESSES` (16) | use per-level queues only if the table grows |
 | SMP: per-CPU slots exist but ownership is UP-only | Low today, high when SMP starts | revisit at SMP bring-up |
 | FAT32 driver not integrated with slab | Moderate | Phase 3 filesystem work |
@@ -127,12 +128,12 @@ PMM (physical frames)
 | Test | Result | Method |
 |------|--------|--------|
 | Slab/memory host stress | ✅ 2269 checks, 0 failures | `cmd /c tests\run_tests.bat` |
-| Scheduler host tests | ✅ 318 checks, 0 failures | `cmd /c tests\run_tests.bat` |
+| Scheduler host tests | ✅ 343 checks, 0 failures (includes idle reaper) | `cmd /c tests\run_tests.bat` |
 | Test sensitivity (mutation) | ✅ 3 failures injected, 3 detected | mutated double-free check |
-| Full kernel build/link | ✅ 201,464-byte kernel ELF, 44,256-byte raw kernel | `python tools\build_kernel.py --quiet` |
-| Boot image | ✅ 66,740-byte `os.elf`, multiboot OK, kernel bytes verified at 0x200000 | build-script validation |
+| Full kernel build/link | ✅ 201,976-byte kernel ELF, 44,384-byte raw kernel | `python tools\build_kernel.py --quiet` |
+| Boot image | ✅ 66,868-byte `os.elf`, multiboot OK, kernel bytes verified at 0x200000 | build-script validation |
 | No vector instructions | ✅ `NO-SSE` build check passes | `objdump` scan in build script |
-| QEMU interactive shell | ✅ `help`, `clear`, `touch runtime.txt`, `ls`, `exit`; 1,527 bytes of serial output | `python tools\boot_test.py ...` over TCP serial |
+| QEMU interactive shell | ✅ `help`, `clear`, `touch runtime.txt`, `ls`, `exit`; 1,528 bytes of serial output | `python tools\boot_test.py ...` over TCP serial |
 | Boot race regression | ✅ 5/5 additional boots `BOOT OK` after the loader fix | repeated `python tools\boot_test.py` runs |
 | Combined quality gate | ✅ host tests → build → interactive boot test all pass | `cmd /c tests\run_all.bat` |
 
@@ -140,9 +141,52 @@ PMM (physical frames)
 
 | Goal | Tasks |
 |------|-------|
-| Automatic reaping / `wait()` | Reap zombies from the idle loop or a wait syscall so owned frames are actually released at runtime |
+| Automatic reaping (idle reaper) | ✅ Done: idle loop reaps zombies so owned frames are released at runtime |
 | Filesystem/POSIX foundation | POSIX fd table, open/read/write/close semantics with tests; then FAT32 read path |
 | Re-run gates | Host tests + full build + interactive boot after each thin slice |
+
+---
+
+### Active Slice: Automatic Zombie Reaping (2026-11-20)
+
+**Spec:** `docs/specs/automatic-zombie-reaping.md`
+
+#### Overview
+
+Add one scheduler API, `scheduler_reap_zombies()`, and call it from process 0's
+idle loop. It reaps every zombie except the current process, using the existing
+`scheduler_reap()` path so frame freeing stays in one place. Parent-aware
+`wait()` is intentionally out of scope.
+
+#### Architecture Decisions
+
+- The idle loop is the natural reaper: it already owns no user resources and
+  runs whenever no real process is runnable.
+- Reaping stays a scheduler concern; `kernel.c` only calls the API.
+- Preemption is disabled for the whole scan so a timer tick cannot observe a
+  half-reaped process table.
+- Returning a count (not a pid) keeps the interface honest: there is no parent
+  relationship or exit-status delivery yet.
+
+#### Task List
+
+- [x] Task AR-1: Write a failing host test for idle reaping
+- [x] Task AR-2: Implement `scheduler_reap_zombies()` and idle-loop call
+- [x] Task AR-3: Run host tests, full build, and interactive boot gate
+
+#### Checkpoint: Automatic Reaping Complete
+
+- [x] Host scheduler test proves net-zero PMM frames without explicit reap
+- [x] `cmd /c tests\run_tests.bat` passes with 0 failures (343 checks)
+- [x] `cmd /c tests\run_all.bat` passes, including `exit` and `BOOT OK`
+
+#### Risks and Mitigations
+
+| Risk | Impact | Mitigation |
+|------|--------|------------|
+| Timer tick observes a partly reaped process | Medium | `preempt_disable()` around the scan |
+| Reaper steals a zombie another caller wants | Low today | No parent-aware wait exists; documented in the spec |
+| Idle loop calls the scanner too often | Low | 16-entry scan, no allocation, one `hlt` per iteration |
 
 ---
 

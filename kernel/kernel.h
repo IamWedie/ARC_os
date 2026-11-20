@@ -179,6 +179,12 @@ int scheduler_block(int pid);
 int scheduler_wake(int pid);
 int scheduler_kill(int pid);
 int scheduler_reap(int pid);
+/*
+ * Reap every zombie except the current process. Intended for the idle loop
+ * (PID 0); returns the number reaped, or -1 if called from a non-idle process.
+ * Preemption is disabled for the whole scan.
+ */
+int scheduler_reap_zombies(void);
 void scheduler_boost(void);
 void scheduler_block_current(void);
 void scheduler_exit_current(int code) __attribute__((noreturn));

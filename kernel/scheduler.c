@@ -466,6 +466,27 @@ int scheduler_reap(int pid) {
     return 0;
 }
 
+/*
+ * Idle-loop reaper.  Process 0 owns no user resources, so it can safely free
+ * every zombie's kernel stack and owned frame runs.  The scan is atomic with
+ * respect to scheduling: a timer tick that arrives here sees preempt_disabled
+ * and returns without touching the half-reaped process table.
+ */
+int scheduler_reap_zombies(void) {
+    if (current_process != 0) return -1;
+
+    int reaped = 0;
+    preempt_disable();
+    for (int pid = 1; pid < MAX_PROCESSES; pid++) {
+        if (processes[pid].state == PROC_ZOMBIE &&
+            scheduler_reap(pid) == 0) {
+            reaped++;
+        }
+    }
+    preempt_enable();
+    return reaped;
+}
+
 void scheduler_boost(void) {
     /* Rebuild every queue so all ready work returns to the top level. */
     for (int l = 0; l < SCHED_MLFQ_LEVELS; l++) {

@@ -484,6 +484,52 @@ static void test_owned_frame_validation(void) {
     CHECK(pmm_stub_used_pages() == before, "attach to FREE slot allocated");
 }
 
+static void test_automatic_reaping(void) {
+    printf("\n=== Test 6d: idle reaper frees zombies automatically ===\n");
+    reset_world();
+    uint64_t before = pmm_stub_used_pages();
+
+    void* kstack = pmm_alloc_pages(4);
+    int pid = process_create_user(USER_CODE_VA,
+                                  (uint64_t)kstack + 4 * 4096ULL, "reapme");
+    CHECK(pid >= 0, "process_create_user failed");
+    CHECK(process_alloc_owned_frames(pid, 3) != NULL, "code attach failed");
+    CHECK(process_alloc_owned_frames(pid, USER_STACK_PAGES) != NULL,
+          "stack attach failed");
+
+    uint64_t alive = pmm_stub_used_pages();
+    CHECK(alive == before + 4 + 3 + USER_STACK_PAGES,
+          "setup allocated %llu frames, want %u",
+          (unsigned long long)(alive - before), 4 + 3 + USER_STACK_PAGES);
+
+    CHECK(scheduler_kill(pid) == 0, "kill failed");
+    CHECK(processes[pid].state == PROC_ZOMBIE, "pid %d not a zombie", pid);
+    CHECK(pmm_stub_used_pages() == alive, "zombie frames freed before reap");
+
+    /* No explicit scheduler_reap(pid): the idle reaper must do it. */
+    CHECK(scheduler_reap_zombies() == 1, "idle reaper did not reap one zombie");
+    CHECK(processes[pid].state == PROC_FREE, "reaped pid %d not FREE", pid);
+    CHECK(pmm_stub_used_pages() == before,
+          "idle reaper leaked %llu frames",
+          (unsigned long long)(pmm_stub_used_pages() - before));
+    CHECK(processes[pid].owned[0].base == 0, "code slot not cleared");
+    CHECK(processes[pid].owned[1].base == 0, "stack slot not cleared");
+    CHECK(scheduler_reap_zombies() == 0, "second idle reap found a zombie");
+    CHECK(pmm_stub_used_pages() == before, "second idle reap changed frames");
+    check_totals("after idle reaping");
+
+    /* A live process cannot invoke the reaper, even for another zombie. */
+    int p2 = process_create(fake_entry, "live");
+    scheduler_switch(0x1234);
+    CHECK(current_process == p2, "switch to p2 failed");
+    CHECK(scheduler_kill(p2) == 0, "kill of p2 failed");
+    uint64_t zombie_pages = pmm_stub_used_pages();
+    CHECK(scheduler_reap_zombies() == -1, "non-idle reaper call accepted");
+    CHECK(processes[p2].state == PROC_ZOMBIE, "non-idle call reaped p2");
+    CHECK(pmm_stub_used_pages() == zombie_pages,
+          "non-idle call freed frames");
+}
+
 static void test_boost(void) {
     printf("\n=== Test 7: priority boost ===\n");
     reset_world();
@@ -547,6 +593,7 @@ int main(void) {
     test_kill_reap();
     test_user_owned_frames();
     test_owned_frame_validation();
+    test_automatic_reaping();
     test_boost();
     test_preempt_disable();
 
