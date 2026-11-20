@@ -298,15 +298,8 @@ typedef struct {
 } fs_file_t;
 
 void fs_init(void);
-int fs_open(const char* name, int create);
-int fs_read(int fd, void* buf, size_t count);
-int fs_write(int fd, const void* buf, size_t count);
-int fs_close(int fd);
-int fs_seek(int fd, uint32_t pos);
 int fs_delete(const char* name);
 int fs_list(void);
-int fs_file_size(int fd);
-int fs_truncate(int fd);
 int fs_rename(const char* oldname, const char* newname);
 
 /*
