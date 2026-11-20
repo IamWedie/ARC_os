@@ -61,7 +61,6 @@ struct pmm_region pmm_region_get(uint32_t i);
 void vmm_init(void);
 void vmm_map_page(uint64_t vaddr, uint64_t paddr, uint8_t flags);
 void vmm_unmap_page(uint64_t vaddr);
-void vmm_create_user_mapping(uint64_t vaddr, uint64_t paddr, size_t pages);
 uint64_t vmm_master_root(void);
 void vmm_invalidate_page(uint64_t vaddr);
 void vmm_switch_address_space(int pid);

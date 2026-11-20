@@ -30,24 +30,27 @@ int user_process_create_from_blob(void) {
     int ready = 0;
 
     if (pid >= 0) {
-        uint8_t* phys = (uint8_t*)process_alloc_owned_frames(pid, pages);
-        if (phys) {
-            memset(phys, 0, pages * 4096);
-            memcpy(phys, _binary_user_shell_bin_start, size);
-            vmm_create_user_mapping(USER_CODE_VA, (uint64_t)phys, pages);
-
-            uint8_t* stk =
-                (uint8_t*)process_alloc_owned_frames(pid, USER_STACK_PAGES);
-            if (stk) {
-                memset(stk, 0, USER_STACK_PAGES * 4096);
-                vmm_create_user_mapping(USER_STACK_VA, (uint64_t)stk,
-                                        USER_STACK_PAGES);
-                ready = 1;
+        if (as_create(pid) == 0) {
+            uint8_t* phys = (uint8_t*)process_alloc_owned_frames(pid, pages);
+            if (phys) {
+                memset(phys, 0, pages * 4096);
+                memcpy(phys, _binary_user_shell_bin_start, size);
+                if (as_map_user(pid, USER_CODE_VA, (uint64_t)phys, pages,
+                                PT_PG_RW) == 0) {
+                    uint8_t* stk = (uint8_t*)process_alloc_owned_frames(
+                        pid, USER_STACK_PAGES);
+                    if (stk) {
+                        memset(stk, 0, USER_STACK_PAGES * 4096);
+                        if (as_map_user(pid, USER_STACK_VA, (uint64_t)stk,
+                                        USER_STACK_PAGES, PT_PG_RW) == 0)
+                            ready = 1;
+                    }
+                }
             }
         }
 
         if (!ready) {
-            /* Reap frees the kernel stack and every frame attached above. */
+            /* Reap frees the root, kernel stack and every frame attached above. */
             scheduler_kill(pid);
             scheduler_reap(pid);
         }

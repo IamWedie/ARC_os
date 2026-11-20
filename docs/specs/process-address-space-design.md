@@ -218,5 +218,48 @@ uint64_t as_root(int pid);            /* 0 when the process has no private root 
 
 ## Verification evidence
 
-Pending implementation. Fill in RED/GREEN counts, build sizes, and QEMU result
-after the module lands.
+Both runs used `cmd /c tests\run_all.bat` from the repository root. GREEN counts
+are passing checks and RED counts are failing checks as reported by each suite.
+
+### Run 1 — green baseline before loader migration (commit `b415c71`)
+
+The shell still mapped through the temporary master-root wrapper; private roots
+existed but were unused.
+
+| Suite | GREEN | RED |
+|---|---:|---:|
+| slab/memory stress | 2269 | 0 |
+| scheduler (including Test 6e, CR3 selection on real switches) | 347 | 0 |
+| file descriptors | 194 | 0 |
+| filesystem slots | 38 | 0 |
+| page-table core | 51 | 0 |
+| per-process address spaces | 29 | 0 |
+
+- Build: user blob 7168 bytes; kernel ELF 243208 bytes; `NO-SSE` OK; kernel.bin
+  50528 bytes; boot image `os.elf` 73168 bytes, multiboot OK; `BUILD OK`.
+- QEMU: reached `arc> `, completed the full command script, `cat fdtest.txt` →
+  `beta`, no `alphabeta`/`betaa`, `BOOT OK: 1675 bytes of serial output`.
+- Result: `QUALITY GATE PASSED`.
+
+### Run 2 — after migrating the shell onto its private root
+
+The loader maps through `as_map_user()`; the scheduler's CR3 load now uses the
+shell's private root on a real boot.
+
+| Suite | GREEN | RED |
+|---|---:|---:|
+| slab/memory stress | 2269 | 0 |
+| scheduler (including Test 6e, CR3 selection on real switches) | 347 | 0 |
+| file descriptors | 194 | 0 |
+| filesystem slots | 38 | 0 |
+| page-table core | 51 | 0 |
+| per-process address spaces | 29 | 0 |
+
+- Build: user blob 7168 bytes; kernel ELF 242624 bytes; `NO-SSE` OK; kernel.bin
+  50480 bytes; boot image `os.elf` 73120 bytes, multiboot OK; `BUILD OK`.
+- QEMU: reached `arc> `, completed the full command script, `cat fdtest.txt` →
+  `beta`, no `alphabeta`/`betaa`, `BOOT OK: 1675 bytes of serial output`.
+- Result: `QUALITY GATE PASSED`. The shell can only be published when
+  `as_create()` and both `as_map_user()` calls succeed, so reaching `arc> `
+  proves the private root was created and loaded; shared slot 0 kept the kernel
+  identity map and MMIO visible after the CR3 switch.
