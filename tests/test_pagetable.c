@@ -124,6 +124,10 @@ static void test_alloc_failure(void) {
     pt_stub_fail_after(-1);
     CHECK(pt_map(root, USER_CODE_VA, 0x1000000, PT_PG_USER, &pt_stub_ops) == 0,
           "root unusable after partial failure");
+    /* The failed attempt kept its two linked tables; the retry allocates only
+     * the missing PT. 3 allocations means no page was orphaned by the failure. */
+    CHECK(pt_stub_alloc_count() == 3, "retry did not reuse partial tables: %d",
+          pt_stub_alloc_count());
     CHECK(pt_count_user_pages(root) == 1, "page count != 1");
 }
 
