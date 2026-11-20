@@ -75,7 +75,8 @@ if errorlevel 1 exit /b 1
 echo [10/10] Building and running fork/wait test against real kernel sources...
 "%GCC%" -O2 -Wall -Wextra -std=gnu11 -I kernel ^
     tests\test_fork_wait.c tests\fork_wait_stub.c ^
-    kernel\scheduler.c ^
+    kernel\scheduler.c kernel\fd.c kernel\address_space.c ^
+    kernel\pagetable.c kernel\fork.c kernel\syscall.c ^
     -o tests\test_fork_wait.exe
 if errorlevel 1 exit /b 1
 

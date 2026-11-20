@@ -454,6 +454,10 @@ void ata_irq_stub(void);
 
 /* Userspace */
 long syscall_dispatch(uint64_t n, uint64_t a1, uint64_t a2, uint64_t a3);
+/* Fork/wait syscall bodies (kernel/fork.c). sys_fork consumes the frame
+ * published by syscall_stub through syscall_frame_rsp. */
+long sys_fork(void);
+long sys_wait(int* status);
 void syscall_stub(void);
 int user_process_create_from_blob(void);
 

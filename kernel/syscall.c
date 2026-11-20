@@ -56,6 +56,8 @@ long syscall_dispatch(uint64_t n, uint64_t a1, uint64_t a2, uint64_t a3) {
     case SYS_DUP:   return fd_dup(pid, (int)a1);
     case SYS_RENAME:return fs_rename((const char*)a1, (const char*)a2);
     case SYS_CLEAR: terminal_clear(); return 0;
+    case SYS_FORK:  return sys_fork();
+    case SYS_WAIT:  return sys_wait((int*)a1);
     default:        return -1;
     }
 }

@@ -17,7 +17,12 @@
 extern uint64_t fork_wait_stub_used_pages(void);
 extern void fork_wait_stub_reset(void);
 extern int fork_wait_stub_cr3_pid;
-extern int fork_wait_stub_as_destroy_calls;
+extern unsigned fork_wait_stub_add_ref_calls(void);
+extern unsigned fork_wait_stub_release_calls(void);
+extern int fork_wait_stub_total_refs(void);
+
+/* Page-table leaves carry flags in their low bits. */
+#define PT_ADDR_MASK 0x000FFFFFFFFFF000ULL
 
 static int tests_passed;
 static int tests_failed;
@@ -36,11 +41,19 @@ static int tests_failed;
 
 static void fake_entry(void) {}
 
+/* Physical page backing `va` in `pid`'s private root, or NULL when unmapped.
+ * Host tests use identity-mapped PMM frames, so the leaf's PFN is a real
+ * pointer we can inspect and mutate. */
+static uint8_t* user_page_phys(int pid, uint64_t va) {
+    uint64_t* leaf = pt_lookup((uint64_t*)(uintptr_t)as_root(pid), va);
+    if (!leaf) return NULL;
+    return (uint8_t*)(uintptr_t)(*leaf & PT_ADDR_MASK);
+}
+
 static void reset_world(void) {
     fork_wait_stub_reset();
     scheduler_init();
     fork_wait_stub_cr3_pid = -1;
-    fork_wait_stub_as_destroy_calls = 0;
 }
 
 /* Build a real user parent (PID 1) and make it the running process. */
@@ -378,6 +391,234 @@ static void test_wait_child_policy(void) {
           "NULL status pointer was rejected");
 }
 
+static void test_sys_fork_clones_as_and_fds(void) {
+    printf("\n=== Test 9: sys_fork clones the address space and fd table ===\n");
+    reset_world();
+
+    /* A kernel/idle caller has no user frame to clone. */
+    int saved = current_process;
+    current_process = 0;
+    CHECK(sys_fork() == -1, "kernel/idle parent forked");
+    current_process = saved;
+
+    int parent = make_user_parent();
+    CHECK(parent > 0, "user parent creation failed (pid %d)", parent);
+    if (parent <= 0) return;
+    CHECK(as_create(parent) == 0, "as_create(parent) failed");
+
+    uint8_t* src = (uint8_t*)pmm_alloc_pages(2);
+    CHECK(src != NULL, "source page allocation failed");
+    if (!src) return;
+    src[0] = 0x11;
+    src[1] = 0x22;
+    src[4096] = 0x33;
+    src[4097] = 0x44;
+    CHECK(as_map_user(parent, USER_CODE_VA, (uint64_t)(uintptr_t)src, 2,
+                      PT_PG_RW) == 0, "source mapping failed");
+
+    int filefd = fd_open(parent, "fork.txt", O_CREAT | O_RDWR);
+    CHECK(filefd >= 3, "fd_open returned %d", filefd);
+    if (filefd < 0) return;
+    CHECK(fork_wait_stub_add_ref_calls() == 1,
+          "fd_open must acquire exactly one slot ref");
+    CHECK(fork_wait_stub_total_refs() == 1, "slot refcount != 1 after open");
+
+    syscall_frame_t frame;
+    fill_frame(&frame);
+    syscall_frame_rsp = (uint64_t)&frame;
+
+    uint64_t pages_before = fork_wait_stub_used_pages();
+    int child = sys_fork();
+    CHECK(child > 0, "sys_fork returned %d", child);
+    if (child <= 0) return;
+    CHECK(child == parent + 1, "child pid = %d, want %d", child, parent + 1);
+    CHECK(processes[child].ppid == parent, "child ppid = %d, want %d",
+          processes[child].ppid, parent);
+    CHECK(preempt_disabled == 0, "preempt left disabled after sys_fork");
+    CHECK(fork_wait_stub_used_pages() > pages_before, "fork allocated nothing");
+
+    CHECK(processes[child].pml4_phys != 0 &&
+          processes[child].pml4_phys != processes[parent].pml4_phys,
+          "child root missing or shared with parent");
+
+    for (int fd = FD_STDIN; fd <= FD_STDERR; fd++) {
+        CHECK(processes[child].fds[fd].kind == processes[parent].fds[fd].kind,
+              "child fd %d kind = %d, want %d", fd,
+              processes[child].fds[fd].kind, processes[parent].fds[fd].kind);
+    }
+    CHECK(processes[child].fds[filefd].kind == FD_ENTRY_FILE,
+          "cloned file fd is not a file");
+    CHECK(processes[child].fds[filefd].ofd ==
+          processes[parent].fds[filefd].ofd, "cloned fd points at a new OFD");
+    CHECK(fork_wait_stub_add_ref_calls() == 1,
+          "fd_clone_process took a second filesystem slot ref");
+    CHECK(fork_wait_stub_total_refs() == 1,
+          "fd_clone_process changed the slot refcount");
+
+    /* Deep copy: same contents, different frames, independent writes. */
+    uint8_t* dst0 = user_page_phys(child, USER_CODE_VA);
+    uint8_t* dst1 = user_page_phys(child, USER_CODE_VA + 4096);
+    CHECK(dst0 != NULL && dst1 != NULL, "child user leaves missing");
+    CHECK(dst0 != src && dst1 != src + 4096, "child reused parent frames");
+    if (dst0 && dst1) {
+        CHECK(dst0[0] == 0x11 && dst0[1] == 0x22 &&
+              dst1[0] == 0x33 && dst1[1] == 0x44,
+              "cloned page contents differ from parent");
+        src[0] = 0x99;
+        CHECK(dst0[0] == 0x11, "parent write changed the child page");
+        dst0[1] = 0x77;
+        CHECK(src[1] == 0x22, "child write changed the parent page");
+    }
+
+    /* A cloned fd shares its OFD (and thus its offset); the slot reference is
+     * still held once. Closing one descriptor must not release the slot. */
+    CHECK(fd_write(child, filefd, "ab", 2) == 2, "write via cloned fd failed");
+    CHECK(fd_seek(parent, filefd, 0, SEEK_SET) == 0, "parent seek failed");
+    char buf[4] = {0, 0, 0, 0};
+    CHECK(fd_read(parent, filefd, buf, 2) == 2 &&
+          buf[0] == 'a' && buf[1] == 'b',
+          "parent did not see bytes written by the child");
+    CHECK(fd_close(child, filefd) == 0, "close of cloned fd failed");
+    CHECK(fork_wait_stub_release_calls() == 0,
+          "closing one of two cloned fds released the shared slot");
+    CHECK(fd_size(parent, filefd) == 2, "parent fd broke when child closed");
+    CHECK(fd_close(parent, filefd) == 0, "close of parent fd failed");
+    CHECK(fork_wait_stub_release_calls() == 1,
+          "slot ref not released when the last fd closed");
+    CHECK(fork_wait_stub_total_refs() == 0, "slot refs leaked after closes");
+
+    CHECK(scheduler_kill(child) == 0, "kill child failed");
+    CHECK(scheduler_reap(child) == 0, "reap child failed");
+    as_destroy(parent);
+    pmm_free_pages(src, 2);
+    CHECK(scheduler_check_invariants() == 0,
+          "run-queue invariants violated after sys_fork");
+}
+
+static void test_sys_wait_collect_and_echild(void) {
+    printf("\n=== Test 10: sys_wait collects a zombie or reports ECHILD ===\n");
+    reset_world();
+
+    int parent = make_user_parent();
+    CHECK(parent > 0, "user parent creation failed (pid %d)", parent);
+    if (parent <= 0) return;
+    CHECK(as_create(parent) == 0, "as_create(parent) failed");
+
+    int status = -99;
+    CHECK(sys_wait(&status) == -1, "ECHILD with no children");
+    CHECK(status == -99, "status written with no children");
+
+    syscall_frame_t frame;
+    fill_frame(&frame);
+    syscall_frame_rsp = (uint64_t)&frame;
+
+    int child = sys_fork();
+    CHECK(child > 0, "sys_fork returned %d", child);
+    if (child <= 0) return;
+
+    processes[child].exit_code = 55;
+    CHECK(scheduler_kill(child) == 0, "kill child failed");
+    uint64_t pages_before = fork_wait_stub_used_pages();
+
+    status = -99;
+    int waited = sys_wait(&status);
+    CHECK(waited == child, "sys_wait returned %d, want %d", waited, child);
+    CHECK(status == 55, "status = %d, want 55", status);
+    CHECK(processes[child].state == PROC_FREE, "collected child not reaped");
+    CHECK(processes[child].ppid == 0, "collected child ppid not cleared");
+    CHECK(processes[child].pml4_phys == 0, "collected child root not freed");
+    CHECK(fork_wait_stub_used_pages() < pages_before,
+          "collecting a child freed no frames");
+
+    CHECK(sys_wait(&status) == -1, "ECHILD after all children collected");
+    CHECK(status == 55, "ECHILD changed the status output");
+    CHECK(sys_wait(NULL) == -1, "NULL status with no children");
+
+    /* NULL status is allowed when there is a real zombie to collect. */
+    int child2 = sys_fork();
+    CHECK(child2 > 0, "second sys_fork returned %d", child2);
+    if (child2 <= 0) return;
+    processes[child2].exit_code = 9;
+    CHECK(scheduler_kill(child2) == 0, "kill second child failed");
+    CHECK(sys_wait(NULL) == child2, "sys_wait(NULL) rejected a zombie child");
+
+    CHECK(scheduler_check_invariants() == 0,
+          "run-queue invariants violated after sys_wait");
+}
+
+static void test_syscall_dispatch_fork_wait(void) {
+    printf("\n=== Test 11: SYS_FORK / SYS_WAIT dispatch ===\n");
+    reset_world();
+
+    int parent = make_user_parent();
+    CHECK(parent > 0, "user parent creation failed (pid %d)", parent);
+    if (parent <= 0) return;
+    CHECK(as_create(parent) == 0, "as_create(parent) failed");
+
+    syscall_frame_t frame;
+    fill_frame(&frame);
+    syscall_frame_rsp = (uint64_t)&frame;
+
+    int child = (int)syscall_dispatch(SYS_FORK, 0, 0, 0);
+    CHECK(child > 0, "SYS_FORK dispatch returned %d", child);
+    if (child <= 0) return;
+
+    processes[child].exit_code = 7;
+    CHECK(scheduler_kill(child) == 0, "kill child failed");
+    int status = -1;
+    int got = (int)syscall_dispatch(SYS_WAIT,
+                                    (uint64_t)(uintptr_t)&status, 0, 0);
+    CHECK(got == child, "SYS_WAIT dispatch returned %d, want %d", got, child);
+    CHECK(status == 7, "status = %d, want 7", status);
+    CHECK(scheduler_check_invariants() == 0,
+          "run-queue invariants violated after dispatch");
+}
+
+static void test_sys_fork_failure_paths(void) {
+    printf("\n=== Test 12: sys_fork failure paths leave no residue ===\n");
+    reset_world();
+
+    int parent = make_user_parent();
+    CHECK(parent > 0, "user parent creation failed (pid %d)", parent);
+    if (parent <= 0) return;
+    CHECK(as_create(parent) == 0, "as_create(parent) failed");
+
+    syscall_frame_t frame;
+    fill_frame(&frame);
+    syscall_frame_rsp = (uint64_t)&frame;
+
+    /* Corrupt one parent fd so fd_clone_process() must fail after the child
+     * slot and address space have already been built. */
+    processes[parent].fds[FD_MAX - 1].kind = FD_ENTRY_FILE;
+    processes[parent].fds[FD_MAX - 1].ofd = -1;
+    uint64_t pages_before = fork_wait_stub_used_pages();
+    int child = sys_fork();
+    CHECK(child == -1, "fork with a broken fd returned %d", child);
+    CHECK(preempt_disabled == 0, "preempt left disabled after clone failure");
+    CHECK(fork_wait_stub_used_pages() == pages_before,
+          "failed fork leaked child resources");
+    for (int i = 1; i < MAX_PROCESSES; i++) {
+        if (i == parent) continue;
+        CHECK(processes[i].ppid != parent,
+              "slot %d is still linked to the parent after clone failure", i);
+    }
+    CHECK(scheduler_check_invariants() == 0,
+          "run-queue invariants violated after clone failure");
+
+    /* No slot left: process_fork fails before any clone is attempted. */
+    for (int i = 0; i < MAX_PROCESSES - 2; i++) {
+        CHECK(process_create(fake_entry, "filler") > 0,
+              "filler %d could not be created", i);
+    }
+    pages_before = fork_wait_stub_used_pages();
+    CHECK(sys_fork() == -1, "sys_fork succeeded with no free PID");
+    CHECK(preempt_disabled == 0, "preempt left disabled after PID failure");
+    CHECK(fork_wait_stub_used_pages() == pages_before,
+          "failed fork allocated frames with no free PID");
+    CHECK(scheduler_check_invariants() == 0,
+          "run-queue invariants violated after failed fork");
+}
+
 int main(void) {
     printf("ARC OS fork/wait test (real kernel/scheduler.c)\n");
 
@@ -389,6 +630,10 @@ int main(void) {
     test_child_exit_wakes_blocked_parent();
     test_reap_clears_ppid();
     test_wait_child_policy();
+    test_sys_fork_clones_as_and_fds();
+    test_sys_wait_collect_and_echild();
+    test_syscall_dispatch_fork_wait();
+    test_sys_fork_failure_paths();
 
     printf("\n=== Results ===\n");
     printf("  passed: %d\n", tests_passed);
