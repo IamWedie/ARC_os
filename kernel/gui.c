@@ -20,6 +20,126 @@ int gui_spring(int t) {
     return v;
 }
 
+#define GUI_CORNER_R 10
+static uint8_t g_corner_mask[GUI_CORNER_R + 1][GUI_CORNER_R + 1];
+static int g_corner_mask_ready = 0;
+
+static void gui_corner_mask_init(void) {
+    if (g_corner_mask_ready) return;
+    for (int dy = 0; dy <= GUI_CORNER_R; dy++) {
+        for (int dx = 0; dx <= GUI_CORNER_R; dx++) {
+            /* distance from corner circle center at (R,R) for pixel inside corner */
+            int ddx = GUI_CORNER_R - dx;
+            int ddy = GUI_CORNER_R - dy;
+            int d2 = ddx * ddx + ddy * ddy;
+            int r2 = GUI_CORNER_R * GUI_CORNER_R;
+            if (d2 <= (GUI_CORNER_R - 1) * (GUI_CORNER_R - 1)) g_corner_mask[dy][dx] = 255;
+            else if (d2 > (GUI_CORNER_R + 1) * (GUI_CORNER_R + 1)) g_corner_mask[dy][dx] = 0;
+            else {
+                /* simple edge AA */
+                int d = 0;
+                /* integer sqrt approx */
+                for (int s = 0; s <= GUI_CORNER_R + 1; s++) { if (s*s <= d2) d = s; else break; }
+                int cov = GUI_CORNER_R - d;
+                if (cov < 0) cov = 0;
+                if (cov > 1) cov = 1;
+                g_corner_mask[dy][dx] = cov ? 128 : 0;
+                (void)r2;
+            }
+        }
+    }
+    g_corner_mask_ready = 1;
+}
+
+static uint8_t gui_corner_alpha(int x, int y, int w, int h) {
+    int r = GUI_CORNER_R;
+    if (x < 0 || y < 0 || x >= w || y >= h) return 0;
+    int dx = x < r ? x : (x >= w - r ? (w - 1 - x) : r);
+    int dy = y < r ? y : (y >= h - r ? (h - 1 - y) : r);
+    if (dx >= r || dy >= r) return 255;
+    if (!g_corner_mask_ready) gui_corner_mask_init();
+    return g_corner_mask[dy][dx];
+}
+
+#define GUI_SHADOW_S 18
+static uint8_t g_shadow_corner[GUI_SHADOW_S + 1][GUI_SHADOW_S + 1];
+static uint8_t g_shadow_edge[GUI_SHADOW_S + 1];
+static int g_shadow_ready = 0;
+
+static void gui_shadow_init(void) {
+    if (g_shadow_ready) return;
+    for (int i = 0; i <= GUI_SHADOW_S; i++) {
+        /* edge falloff: 0 at outer edge, stronger near window */
+        int a = (i * 40) / GUI_SHADOW_S;
+        if (a > 40) a = 40;
+        g_shadow_edge[i] = (uint8_t)a;
+    }
+    for (int dy = 0; dy <= GUI_SHADOW_S; dy++) {
+        for (int dx = 0; dx <= GUI_SHADOW_S; dx++) {
+            /* distance outside rounded corner; inside corner area uses edge */
+            int ddx = GUI_SHADOW_S - dx;
+            int ddy = GUI_SHADOW_S - dy;
+            int d2 = ddx * ddx + ddy * ddy;
+            int r = GUI_SHADOW_S;
+            int a = 0;
+            if (d2 <= r * r) {
+                /* approx distance from corner arc */
+                int d = 0;
+                while ((d + 1) * (d + 1) <= d2) d++;
+                int dist = r - d; /* 0..r, larger means farther inside */
+                a = (dist * 40) / r;
+                if (a < 0) a = 0;
+                if (a > 40) a = 40;
+            } else {
+                a = 0;
+            }
+            g_shadow_corner[dy][dx] = (uint8_t)a;
+        }
+    }
+    g_shadow_ready = 1;
+}
+
+static void draw_window_shadow(struct gfx_fb* fb, int wx, int wy, int ww, int wh) {
+    if (!fb || !fb->pixels) return;
+    gui_shadow_init();
+    int S = GUI_SHADOW_S;
+    int ox = 0, oy = 6; /* shadow offset */
+    int sx = wx - S + ox;
+    int sy = wy - S + oy;
+    int sw = ww + S * 2;
+    int sh = wh + S * 2;
+    int fbw = (int)fb->width, fbh = (int)fb->height;
+    for (int y = 0; y < sh; y++) {
+        int py = sy + y;
+        if (py < 0 || py >= fbh) continue;
+        uint32_t* row = fb->pixels + py * fbw;
+        for (int x = 0; x < sw; x++) {
+            int px = sx + x;
+            if (px < 0 || px >= fbw) continue;
+            /* determine 9-slice region */
+            int in_left = x < S;
+            int in_right = x >= sw - S;
+            int in_top = y < S;
+            int in_bot = y >= sh - S;
+            uint8_t a = 0;
+            if (in_top && in_left) a = g_shadow_corner[y][x];
+            else if (in_top && in_right) a = g_shadow_corner[y][sw - 1 - x];
+            else if (in_bot && in_left) a = g_shadow_corner[sh - 1 - y][x];
+            else if (in_bot && in_right) a = g_shadow_corner[sh - 1 - y][sw - 1 - x];
+            else if (in_top) a = g_shadow_edge[S - 1 - y];
+            else if (in_bot) a = g_shadow_edge[S - 1 - (sh - 1 - y)];
+            else if (in_left) a = g_shadow_edge[S - 1 - x];
+            else if (in_right) a = g_shadow_edge[S - 1 - (sw - 1 - x)];
+            else a = 40; /* center */
+            if (!a) continue;
+            /* skip area under window (opaque window will cover) - keep simple */
+            uint32_t bg = row[px];
+            uint32_t sp = ((uint32_t)a << 24); /* premul black shadow */
+            row[px] = gfx_blend_premul(sp, bg);
+        }
+    }
+}
+
 int gui_hit_test_titlebar(const struct comp_window* win, int px, int py) {
     if (!win) return 0;
     return px >= win->x && px < win->x + win->w &&
@@ -116,19 +236,22 @@ static void draw_window_chrome(struct comp_window* win, const char* title, int f
     int w = win->w, h = win->h;
     uint32_t* s = win->surface;
     uint32_t bg = gfx_rgba(245, 245, 247, 255);
-    uint32_t tbar = focused ? gfx_rgba(235, 235, 238, 255) : gfx_rgba(246, 246, 248, 255);
-    uint32_t border = gfx_rgba(180, 180, 185, 255);
+    uint32_t tbar = focused ? gfx_rgba(235, 235, 238, 255) : gfx_rgba(228, 228, 232, 255);
+    uint32_t titlec = focused ? gfx_rgba(40, 40, 45, 255) : gfx_rgba(120, 120, 128, 255);
+    uint32_t border = focused ? gfx_rgba(170, 170, 178, 255) : gfx_rgba(190, 190, 196, 255);
+    uint32_t sep = gfx_rgba(210, 210, 215, 255);
+    gui_corner_mask_init();
     for (int i = 0; i < w * h; i++) s[i] = 0; /* transparent */
-    draw_rounded_rect(s, w, h, 0, 0, w, h, 10, bg);
+    draw_rounded_rect(s, w, h, 0, 0, w, h, GUI_CORNER_R, bg);
     /* title bar */
-    draw_rounded_rect(s, w, h, 0, 0, w, GUI_TITLE_H + 10, 10, tbar);
-    fill_rect_buf(s, w, h, 0, 10, w, GUI_TITLE_H - 10, tbar);
+    draw_rounded_rect(s, w, h, 0, 0, w, GUI_TITLE_H + GUI_CORNER_R, GUI_CORNER_R, tbar);
+    fill_rect_buf(s, w, h, 0, GUI_CORNER_R, w, GUI_TITLE_H - GUI_CORNER_R, tbar);
     /* separator */
-    fill_rect_buf(s, w, h, 0, GUI_TITLE_H - 1, w, 1, gfx_rgba(210, 210, 215, 255));
+    fill_rect_buf(s, w, h, 1, GUI_TITLE_H - 1, w - 2, 1, sep);
     /* traffic lights */
-    uint32_t red = gfx_rgba(255, 95, 87, 255);
-    uint32_t yellow = gfx_rgba(255, 189, 46, 255);
-    uint32_t green = gfx_rgba(39, 201, 63, 255);
+    uint32_t red = focused ? gfx_rgba(255, 95, 87, 255) : gfx_rgba(200, 200, 205, 255);
+    uint32_t yellow = focused ? gfx_rgba(255, 189, 46, 255) : gfx_rgba(200, 200, 205, 255);
+    uint32_t green = focused ? gfx_rgba(39, 201, 63, 255) : gfx_rgba(200, 200, 205, 255);
     int cy = 14;
     int r = 6;
     for (int dy = -r; dy <= r; dy++) for (int dx = -r; dx <= r; dx++) {
@@ -139,12 +262,25 @@ static void draw_window_chrome(struct comp_window* win, const char* title, int f
         int x1 = 38 + dx; if (x1 >= 0 && x1 < w) s[yy*w + x1] = yellow;
         int x2 = 58 + dx; if (x2 >= 0 && x2 < w) s[yy*w + x2] = green;
     }
-    /* border (simple 1px) */
-    for (int x = 0; x < w; x++) { s[x] = border; s[(h-1)*w + x] = border; }
-    for (int y = 0; y < h; y++) { s[y*w] = border; s[y*w + w-1] = border; }
+    /* rounded 1px border */
+    for (int y = 0; y < h; y++) {
+        for (int x = 0; x < w; x++) {
+            uint8_t ca = gui_corner_alpha(x, y, w, h);
+            if (ca == 0) { s[y*w+x] = 0; continue; }
+            int border_px = (x == 0 || y == 0 || x == w-1 || y == h-1);
+            if (!border_px) {
+                /* inner edge of rounded corner */
+                uint8_t ca_r = (x+1 < w) ? gui_corner_alpha(x+1, y, w, h) : 0;
+                uint8_t ca_l = (x>0) ? gui_corner_alpha(x-1, y, w, h) : 0;
+                uint8_t ca_d = (y+1 < h) ? gui_corner_alpha(x, y+1, w, h) : 0;
+                uint8_t ca_u = (y>0) ? gui_corner_alpha(x, y-1, w, h) : 0;
+                if (ca_r == 0 || ca_l == 0 || ca_d == 0 || ca_u == 0) border_px = 1;
+            }
+            if (border_px) s[y*w+x] = border;
+        }
+    }
     /* title text */
-    draw_text_buf(s, w, h, 80, 6, title, gfx_rgba(40, 40, 45, 255));
-    (void)border;
+    draw_text_buf(s, w, h, 80, 6, title, titlec);
 }
 static void draw_menu_bar(struct gfx_fb* fb, struct gui_state* g) {
     if (!fb || !fb->pixels) return;
@@ -420,6 +556,13 @@ void gui_tick(struct gui_state* g, struct gfx_fb* fb) {
     for (int i=0;i<g->win_count;i++) {
         struct comp_window* cw = comp_find(&g->comp, g->wins[i].comp_id);
         if (cw) gui_draw_window_content(&g->wins[i], cw, g);
+    }
+    /* cached 9-slice shadows behind windows */
+    for (int zi = 0; zi < g->comp.zcount; zi++) {
+        int idx = g->comp.zorder[zi];
+        struct comp_window* cw = &g->comp.windows[idx];
+        if (cw->used && (cw->flags & COMP_WIN_VISIBLE))
+            draw_window_shadow(fb, cw->x, cw->y, cw->w, cw->h);
     }
     struct gfx_rect full = {0,0,(int)fb->width,(int)fb->height};
     comp_composite(&g->comp, fb, &full);
