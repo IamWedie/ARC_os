@@ -284,6 +284,7 @@ static void gui_draw_window_content(struct gui_window* gw, struct comp_window* c
     } else if (gw->app == GUI_APP_NOTES) {
         draw_text_buf(cw->surface,cw->w,cw->h,cx,cy,"Notes",textc);
         draw_text_buf(cw->surface,cw->w,cw->h,cx,cy+24,"Type here (focused window)",gfx_rgba(80,80,90,255));
+        if (gw->text_len > 0) draw_text_buf(cw->surface,cw->w,cw->h,cx,cy+52,gw->text,textc);
     } else if (gw->app == GUI_APP_FILES) {
         draw_text_buf(cw->surface,cw->w,cw->h,cx,cy,"Files",textc);
         draw_text_buf(cw->surface,cw->w,cw->h,cx,cy+24,"/ readme.txt",textc);
@@ -322,6 +323,7 @@ static struct gui_window* gui_open_app(struct gui_state* g, enum gui_app app) {
     if(!cw){ pmm_free_pages(surf,pages); return 0; }
     struct gui_window* gw = &g->wins[g->win_count++];
     gw->comp_id=cw->id; gw->app=app; gw->closing=0; gw->focused=1;
+    gw->text_len=0; gw->text[0]=0;
     const char* t="Window";
     if(app==GUI_APP_ABOUT) t="About";
     else if(app==GUI_APP_NOTES) t="Notes";
@@ -442,3 +444,22 @@ void gui_frame_tick(void) {
 }
 
 struct gui_state* gui_get_state(void) { return &g_gui; }
+
+int gui_handle_key(char c) {
+    if (!g_gui_active) return 0;
+    struct gui_state* g = &g_gui;
+    if (!g->focused_id) return 0;
+    struct gui_window* gw = 0;
+    for (int i = 0; i < g->win_count; i++) if (g->wins[i].comp_id == g->focused_id) gw = &g->wins[i];
+    if (!gw || gw->app != GUI_APP_NOTES) return 0;
+    if (c == '\b' || c == 127) {
+        if (gw->text_len > 0) gw->text[--gw->text_len] = 0;
+        return 1;
+    }
+    if (c == '\n' || c == '\r') c = ' ';
+    if (c >= 32 && c < 127 && gw->text_len < (int)sizeof(gw->text) - 1) {
+        gw->text[gw->text_len++] = c;
+        gw->text[gw->text_len] = 0;
+    }
+    return 1;
+}

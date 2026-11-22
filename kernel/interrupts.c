@@ -86,6 +86,12 @@ void irq1_handler(void) {
         char c = shift_down ? scancode_shift_map[scancode]
                             : scancode_map[scancode];
         if (c != 0) {
+            int gui_handle_key(char c);
+            if (gui_handle_key(c)) {
+                outb(0x20, 0x20);
+                lapic_eoi();
+                return;
+            }
             int next = (kbd_head + 1) & (KBD_BUFSIZE - 1);
             if (next != kbd_tail) {
                 kbd_buffer[kbd_head] = (uint8_t)c;

@@ -23,7 +23,7 @@
 - [x] Step 5: dock (centered pill, hover magnification, running indicator)
 - [ ] Step 6: animations (ease-out/spring open/close/minimize)
 - [x] Step 7: built-in apps (About, Notes, Files, System Monitor)
-- [ ] Step 8: keyboard routing (focused text field gets keys, else shell)
+- [x] Step 8: keyboard routing (focused text field gets keys, else shell)
 - [x] Host tests: tests/test_gui.c suite 13 extended
 - [x] QEMU gate: tests/boot_test_gui.py desktop screendump assertions
 - [ ] M2 interaction gate: mouse move/click/window appear/drag/close/dock hover
