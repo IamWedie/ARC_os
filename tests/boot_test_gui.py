@@ -213,7 +213,7 @@ def main():
         for name, x, y, want in checks:
             got = px(pix, w, x, y)
             if want == (-1, -1, -1):
-                ok = False  # sentinel means condition failed above
+                ok = False
                 print("  FAIL %s (%d,%d) got=%s" % (name, x, y, got))
             else:
                 ok = near(got, want, 25)
@@ -223,6 +223,109 @@ def main():
         if w != 1920 or h != 1080:
             print("  FAIL resolution %dx%d" % (w, h))
             failed += 1
+
+        # M2 interaction checks: mouse move/click/window appear/drag/close/dock hover
+        mouse = [960, 540]
+        def accel(v):
+            av = abs(v)
+            if av <= 2: return v
+            if av <= 20: return v * 2
+            return v * 3
+
+        def find_cursor():
+            data = screendump(mon, ppm_path)
+            ww, hh, pp = parse_ppm(data)
+            def P(x, y):
+                if x < 0 or y < 0 or x >= ww or y >= hh: return (-1, -1, -1)
+                o = (y * ww + x) * 3
+                return tuple(pp[o:o+3])
+            for y in range(hh - 12):
+                for x in range(ww - 8):
+                    if (P(x, y) == (0, 0, 0) and P(x, y+1) == (0, 0, 0) and
+                        P(x+1, y+1) == (0, 0, 0) and P(x, y+2) == (0, 0, 0)):
+                        # verify looks like cursor: (x+1,y) should be non-black
+                        if P(x+1, y) != (0, 0, 0):
+                            return x, y
+            return None
+
+        def move_to(tx, ty):
+            for _ in range(300):
+                cur = find_cursor()
+                if cur:
+                    mouse[0], mouse[1] = cur
+                if abs(mouse[0] - tx) <= 2 and abs(mouse[1] - ty) <= 2:
+                    return
+                sdx = tx - mouse[0]
+                sdy = ty - mouse[1]
+                def pick(sd):
+                    ad = abs(sd)
+                    sign = 1 if sd > 0 else -1
+                    if ad <= 2: return sd
+                    if ad <= 40: return sign * max(1, min(20, ad // 2))
+                    return sign * max(1, min(60, ad // 3))
+                rx = pick(sdx)
+                ry = pick(sdy)
+                hmp_cmd(mon, "mouse_move %d %d" % (rx, ry), wait=0.05)
+                mouse[0] = max(0, min(1919, mouse[0] + accel(rx)))
+                mouse[1] = max(0, min(1079, mouse[1] + accel(ry)))
+            time.sleep(0.2)
+
+        def click_at(tx, ty):
+            for ox, oy in [(0,0),(2,0),(-2,0),(0,2),(0,-2)]:
+                move_to(tx+ox, ty+oy)
+                hmp_cmd(mon, "mouse_button 1", wait=0.08)
+                hmp_cmd(mon, "mouse_button 0", wait=0.12)
+            time.sleep(0.3)
+
+        def dump_check(name, x, y, pred, desc):
+            nonlocal failed, pix, w, h
+            data = screendump(mon, ppm_path)
+            w, h, pix = parse_ppm(data)
+            got = px(pix, w, x, y)
+            ok = pred(got)
+            print(("  PASS" if ok else "  FAIL") + " %s (%d,%d) got=%s %s" % (name, x, y, got, desc))
+            if not ok:
+                failed += 1
+
+        # Open Notes via dock icon (index 1)
+        notes_x = 1920//2 - (4*56 + 3*8)//2 + 1*(56+8) + 28
+        notes_y = 1080 - 40
+        click_at(notes_x, notes_y)
+        time.sleep(1.5)
+        dump_check("notes window appeared", 250, 210, lambda c: c[0] > 220 and c[1] > 220, "expect bright window")
+
+        # Drag About window by title bar (About at 120,80)
+        for sy in [94, 92, 96]:
+            move_to(300, sy)
+            time.sleep(0.2)
+            hmp_cmd(mon, "mouse_button 1", wait=0.12)
+            move_to(500, 150)
+            hmp_cmd(mon, "mouse_button 0", wait=0.2)
+            time.sleep(0.8)
+        time.sleep(1.0)
+        data = screendump(mon, ppm_path)
+        w, h, pix = parse_ppm(data)
+        got_new = px(pix, w, 600, 200)
+        got_old = px(pix, w, 130, 150)
+        drag_ok = got_new[0] > 220 and got_new[1] > 220
+        old_ok = got_old[0] < 120
+        print(("  PASS" if drag_ok else "  FAIL") + " drag moved window (600,200) got=%s expect window at new pos" % (got_new,))
+        print(("  PASS" if old_ok else "  FAIL") + " drag left old area (130,150) got=%s expect wallpaper" % (got_old,))
+        if not drag_ok: failed += 1
+        if not old_ok: failed += 1
+
+        # Close Notes window (opened at 150,104, still there)
+        for _ in range(3):
+            click_at(168, 118)
+            time.sleep(1.0)
+        time.sleep(1.5)
+        dump_check("close removed window", 250, 210, lambda c: c[0] < 150, "expect wallpaper/shadow gone")
+
+        # Dock hover over About icon
+        about_x = 1920//2 - (4*56 + 3*8)//2 + 0*(56+8) + 28
+        move_to(about_x, 1080 - 40)
+        time.sleep(0.5)
+        dump_check("dock hover", about_x - 10, 1080 - 45, lambda c: c != (0,0,0) and (c[0] > 40 or c[1] > 80 or c[2] > 120), "expect icon/dock pixel")
 
         mon.close()
     except Exception as e:

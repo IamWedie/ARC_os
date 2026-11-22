@@ -26,5 +26,5 @@
 - [x] Step 8: keyboard routing (focused text field gets keys, else shell)
 - [x] Host tests: tests/test_gui.c suite 13 extended
 - [x] QEMU gate: tests/boot_test_gui.py desktop screendump assertions
-- [ ] M2 interaction gate: mouse move/click/window appear/drag/close/dock hover
+- [x] M2 interaction gate: mouse move/click/window appear/drag/close/dock hover
 - [ ] All M2 gates green, commit, review, merge/tag
