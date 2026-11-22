@@ -23,6 +23,7 @@ A work-in-progress x86_64 operating system built entirely from scratch — no Li
 - [VGA Text Mode](#vga-text-mode)
 - [Shell Commands](#shell-commands)
 - [Extending the OS](#extending-the-os)
+- [Roadmap](#roadmap)
 - [FAQ](#faq)
 - [Contributing](#contributing)
 - [License](#license)
@@ -425,6 +426,24 @@ tables for the user mappings above.
 - Package manager — Install additional software
 - Display driver — Multiple resolution support
 - Memory management — Demand paging, copy-on-write
+
+---
+
+## Roadmap
+
+The 24-month plan from the current verified kernel base (`b25aac8`) to a real
+hardware desktop OS is tracked in
+[`docs/specs/arc-os-24-month-roadmap.md`](docs/specs/arc-os-24-month-roadmap.md).
+Milestone status, risks, and hardware results are recorded in `tasks/`.
+
+## Toolchain (recorded for M0)
+
+| Tool | Version / Path | Notes |
+|------|----------------|-------|
+| Zig | 0.16.0 (`C:\Users\wadia\zig\ziglang\zig.exe`) | Freestanding x86_64 ELF compiler/linker |
+| QEMU | 11.1.0 (`C:\Program Files\qemu\qemu-system-x86_64.exe`) | TCG boot/gate runs |
+| Python | 3.12.11 | Build and boot-test scripts |
+| GNU objcopy | MSYS2 UCRT64 Binutils (see build output) | Binary conversion / blob embedding |
 
 ---
 
