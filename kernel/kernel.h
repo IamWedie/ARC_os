@@ -87,6 +87,17 @@ int  as_replace_user(int pid, uint64_t code_pa, size_t code_pages,
                      uint64_t stack_pa, size_t stack_pages);
 
 /*
+ * Exec loader (exec.c). exec_build_user_stack returns the user VA of argc;
+ * exec_load_image returns 0 on success or -1 with no mutation on failure.
+ */
+#define EXEC_MAX_ARGS 8
+#define EXEC_MAX_ARG_LEN 128
+uint64_t exec_build_user_stack(uint8_t* stack_base, size_t stack_bytes,
+                               char* const argv[], int argc);
+int exec_load_image(int pid, const uint8_t* image, size_t size,
+                    char* const argv[], int argc, uint64_t* user_rsp_out);
+
+/*
  * Page-table walk core (pagetable.c).
  *
  * Pure logic over identity-accessible memory: no CR3 load, no INVLPG, and no

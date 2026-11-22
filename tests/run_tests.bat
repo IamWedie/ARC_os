@@ -9,29 +9,29 @@ if not exist "%GCC%" (
     exit /b 1
 )
 
-echo [1/10] Building slab/memory stress test against real kernel sources...
+echo [1/11] Building slab/memory stress test against real kernel sources...
 "%GCC%" -O2 -Wall -Wextra -std=gnu11 -I kernel ^
     tests\test_slab_stress.c tests\pmm_stub.c ^
     kernel\slab.c kernel\memory.c ^
     -o tests\test_slab_stress.exe
 if errorlevel 1 exit /b 1
 
-echo [2/10] Running slab/memory stress test...
+echo [2/11] Running slab/memory stress test...
 tests\test_slab_stress.exe
 if errorlevel 1 exit /b 1
 
-echo [3/10] Building scheduler test against real kernel sources...
+echo [3/11] Building scheduler test against real kernel sources...
 "%GCC%" -O2 -Wall -Wextra -std=gnu11 -I kernel ^
     tests\test_scheduler.c tests\pmm_stub.c tests\scheduler_stub.c ^
     kernel\scheduler.c ^
     -o tests\test_scheduler.exe
 if errorlevel 1 exit /b 1
 
-echo [4/10] Running scheduler test...
+echo [4/11] Running scheduler test...
 tests\test_scheduler.exe
 if errorlevel 1 exit /b 1
 
-echo [5/10] Building and running file descriptor test...
+echo [5/11] Building and running file descriptor test...
 "%GCC%" -O2 -Wall -Wextra -std=gnu11 -I kernel ^
     tests\test_fd.c tests\fd_stub.c ^
     kernel\fd.c ^
@@ -41,7 +41,7 @@ if errorlevel 1 exit /b 1
 tests\test_fd.exe
 if errorlevel 1 exit /b 1
 
-echo [6/10] Building and running real filesystem slot test...
+echo [6/11] Building and running real filesystem slot test...
 "%GCC%" -O2 -Wall -Wextra -std=gnu11 -I kernel ^
     tests\test_fs_slot.c tests\fs_stub.c tests\pmm_stub.c ^
     kernel\fs.c ^
@@ -51,7 +51,7 @@ if errorlevel 1 exit /b 1
 tests\test_fs_slot.exe
 if errorlevel 1 exit /b 1
 
-echo [7/10] Building and running page-table core test against real kernel sources...
+echo [7/11] Building and running page-table core test against real kernel sources...
 "%GCC%" -O2 -Wall -Wextra -std=gnu11 -I kernel ^
     tests\test_pagetable.c tests\pt_stub.c ^
     kernel\pagetable.c ^
@@ -61,18 +61,18 @@ if errorlevel 1 exit /b 1
 tests\test_pagetable.exe
 if errorlevel 1 exit /b 1
 
-echo [8/10] Building per-process address-space test against real kernel sources...
+echo [8/11] Building per-process address-space test against real kernel sources...
 "%GCC%" -O2 -Wall -Wextra -std=gnu11 -I kernel ^
     tests\test_address_space.c tests\pmm_stub.c ^
     kernel\address_space.c kernel\pagetable.c ^
     -o tests\test_address_space.exe
 if errorlevel 1 exit /b 1
 
-echo [9/10] Running per-process address-space test...
+echo [9/11] Running per-process address-space test...
 tests\test_address_space.exe
 if errorlevel 1 exit /b 1
 
-echo [10/10] Building and running fork/wait test against real kernel sources...
+echo [10/11] Building and running fork/wait test against real kernel sources...
 "%GCC%" -O2 -Wall -Wextra -std=gnu11 -I kernel ^
     tests\test_fork_wait.c tests\fork_wait_stub.c ^
     kernel\scheduler.c kernel\fd.c kernel\address_space.c ^
@@ -81,4 +81,15 @@ echo [10/10] Building and running fork/wait test against real kernel sources...
 if errorlevel 1 exit /b 1
 
 tests\test_fork_wait.exe
+if errorlevel 1 exit /b 1
+
+echo [11/11] Building and running exec-loader test against real kernel sources...
+"%GCC%" -O2 -Wall -Wextra -std=gnu11 -I kernel ^
+    tests\test_exec.c tests\exec_stub.c ^
+    kernel\scheduler.c kernel\address_space.c kernel\pagetable.c ^
+    kernel\exec.c kernel\fd.c ^
+    -o tests\test_exec.exe
+if errorlevel 1 exit /b 1
+
+tests\test_exec.exe
 exit /b %errorlevel%
