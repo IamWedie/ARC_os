@@ -42,6 +42,7 @@ void kernel_main(uint64_t multiboot_addr) {
     scheduler_init();
     ata_init();
     fs_init();
+    exec_install_programs();
     
     /* Print system info */
     terminal_putstring("Kernel loaded at ");

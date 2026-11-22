@@ -270,3 +270,25 @@ fail:
     preempt_enable();
     return -1;
 }
+
+/* ------------------------------------------------------------------ */
+/* Boot-time program registry                                          */
+/* ------------------------------------------------------------------ */
+
+/*
+ * Publish the second embedded flat binary in the RAM FS before the shell
+ * starts. The OFD-style ref is acquired and released exactly as in fs_init's
+ * welcome.txt seeding, so a boot-time write leaves no slot references behind
+ * and does not disturb the one-ref-per-OFD contract.
+ */
+void exec_install_programs(void) {
+    size_t size = (size_t)_binary_user_hello_bin_size;
+    if (size == 0 || size > (size_t)FS_MAX_FILESIZE) return;
+
+    int slot = fs_open_slot("hello.bin", 1);
+    if (slot < 0) return;
+    if (fs_slot_add_ref(slot) != 0) return;
+
+    fs_slot_write(slot, 0, _binary_user_hello_bin_start, size);
+    fs_slot_release(slot);
+}

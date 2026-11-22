@@ -12,7 +12,13 @@ _start:
     movw %ax, %es
     movw %ax, %fs
     movw %ax, %gs
-    call shell_main
+
+    /* Initial user stack: argc word, then argv[] + NULL (exec_build_user_stack).
+     * rsi points at argv[0]; align the stack to 16 bytes before the call. */
+    popq %rdi                   /* argc */
+    movq %rsp, %rsi             /* argv */
+    andq $-16, %rsp
+    call user_main
     movq $3, %rdi              /* SYS_EXIT */
     xorq %rsi, %rsi
     xorq %rdx, %rdx

@@ -418,3 +418,10 @@ void shell_main(void) {
         run_command(buf);
     }
 }
+
+/* User entry ABI shared with the exec'd programs: crt0 passes argc/argv. */
+void user_main(int argc, char** argv) {
+    (void)argc;
+    (void)argv;
+    shell_main();
+}

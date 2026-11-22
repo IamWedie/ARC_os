@@ -20,6 +20,8 @@ extern uint64_t exec_stub_used_pages(void);
 extern void exec_stub_reset(void);
 extern int exec_stub_cr3_pid;
 extern int exec_stub_total_refs(void);
+extern unsigned exec_stub_add_ref_calls(void);
+extern unsigned exec_stub_release_calls(void);
 /* Lets a host test create a slot whose declared size exceeds the loader cap
  * without writing that many bytes into the stub's small data buffer. */
 extern int exec_stub_set_slot_size(const char* name, uint32_t size);
@@ -624,6 +626,42 @@ static void test_exec_accepts_eight_args(void) {
     exec_teardown_world(&w);
 }
 
+/* ------------------------------------------------------------------ */
+/* Test 9: boot-time program registry                                   */
+/* ------------------------------------------------------------------ */
+
+static void test_exec_install_programs(void) {
+    printf("\n=== Test 9: exec_install_programs installs the embedded hello blob ===\n");
+    reset_world();
+
+    exec_install_programs();
+
+    int slot = fs_find_slot("hello.bin");
+    CHECK(slot >= 0, "hello.bin was not installed in the FS");
+    if (slot < 0) return;
+
+    size_t blob_size = (size_t)_binary_user_hello_bin_size;
+    CHECK(blob_size == 6, "fake blob size %u, want 6", (unsigned)blob_size);
+    CHECK(fs_slot_size(slot) == (int)blob_size,
+          "hello.bin size %d, want %u", fs_slot_size(slot), (unsigned)blob_size);
+
+    uint8_t buf[64] = {0};
+    size_t read_size = blob_size < sizeof(buf) ? blob_size : sizeof(buf);
+    CHECK(fs_slot_read(slot, 0, buf, read_size) == (int)read_size,
+          "fs_slot_read did not return the whole blob");
+    CHECK(memcmp(buf, _binary_user_hello_bin_start, read_size) == 0,
+          "hello.bin bytes differ from the embedded blob");
+
+    CHECK(exec_stub_add_ref_calls() == 1,
+          "fs_slot_add_ref called %u times, want 1",
+          exec_stub_add_ref_calls());
+    CHECK(exec_stub_release_calls() == 1,
+          "fs_slot_release called %u times, want 1",
+          exec_stub_release_calls());
+    CHECK(exec_stub_total_refs() == 0,
+          "boot registry leaked %d slot refs", exec_stub_total_refs());
+}
+
 int main(void) {
     printf("ARC OS exec-loader test (real kernel sources)\n");
 
@@ -635,6 +673,7 @@ int main(void) {
     test_exec_close_on_exec();
     test_exec_syscall_dispatch();
     test_exec_accepts_eight_args();
+    test_exec_install_programs();
 
     printf("\n=== Results ===\n");
     printf("  passed: %d\n", tests_passed);

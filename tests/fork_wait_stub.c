@@ -107,6 +107,18 @@ uint64_t vmm_master_root(void) {
 void vmm_invalidate_page(uint64_t vaddr) { (void)vaddr; }
 
 /* ------------------------------------------------------------------ */
+/* Fake second embedded blob (exec.c's boot registry links against it).  */
+/* ------------------------------------------------------------------ */
+
+__asm__(".globl _binary_user_hello_bin_start\n"
+        "_binary_user_hello_bin_start:\n"
+        ".byte 0x48, 0x65, 0x6c, 0x6c, 0x6f, 0x0a\n"
+        ".globl _binary_user_hello_bin_end\n"
+        "_binary_user_hello_bin_end:\n"
+        ".globl _binary_user_hello_bin_size\n"
+        ".set _binary_user_hello_bin_size, 6\n");
+
+/* ------------------------------------------------------------------ */
 /* Console hooks used by real kernel/fd.c and kernel/syscall.c          */
 /* ------------------------------------------------------------------ */
 

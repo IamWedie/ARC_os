@@ -41,9 +41,26 @@ int user_process_create_from_blob(void) {
                         pid, USER_STACK_PAGES);
                     if (stk) {
                         memset(stk, 0, USER_STACK_PAGES * 4096);
-                        if (as_map_user(pid, USER_STACK_VA, (uint64_t)stk,
-                                        USER_STACK_PAGES, PT_PG_RW) == 0)
+
+                        /* Build argc/argv before the run becomes visible to
+                         * the process: crt0 pops argc from the initial RSP. */
+                        char* args[] = { "shell", NULL };
+                        uint64_t arg_rsp = exec_build_user_stack(
+                            stk, USER_STACK_PAGES * 4096, args, 1);
+                        if (arg_rsp != 0 &&
+                            as_map_user(pid, USER_STACK_VA, (uint64_t)stk,
+                                        USER_STACK_PAGES, PT_PG_RW) == 0) {
+                            /*
+                             * process_create_user() enters ring 3 with
+                             * rsp == USER_STACK_TOP, which is one byte past
+                             * the mapped run. Rewrite the RSP slot of its
+                             * initial iretq frame (kstack_sp - 16) to the
+                             * argc word. Still inside the no-preempt window.
+                             */
+                            ((uint64_t*)(uintptr_t)processes[pid].kstack_sp)[-2]
+                                = arg_rsp;
                             ready = 1;
+                        }
                     }
                 }
             }

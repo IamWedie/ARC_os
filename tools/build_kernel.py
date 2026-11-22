@@ -42,6 +42,17 @@ def log(msg):
     print(msg, flush=True)
 
 
+def verify_user_hello_blob():
+    """The boot-time program registry needs a nonempty second user blob."""
+    path = os.path.join(BUILD, "user_hello.bin")
+    if not os.path.isfile(path):
+        raise BuildError("ring-3 hello blob is missing: %s" % rel(path))
+    size = os.path.getsize(path)
+    if size == 0:
+        raise BuildError("ring-3 hello blob is empty")
+    return size
+
+
 def run(cmd, cwd=ROOT, capture=True):
     shown = " ".join(cmd)
     if not QUIET:
@@ -151,47 +162,64 @@ def compile_kernel(zig):
     return objs
 
 
-def build_user_shell(zig, objcopy):
-    user_flags = [
-        "-target", "x86_64-freestanding",
-        "-ffreestanding", "-fno-builtin",
-        "-fno-sanitize=all",
-        "-fno-asynchronous-unwind-tables", "-fno-unwind-tables",
-        "-fno-pic", "-fno-pie", "-fno-stack-protector",
-        "-mno-red-zone", "-mno-mmx", "-mno-sse", "-mno-sse2", "-mno-avx",
-        "-mcmodel=large", "-O2",
-    ]
-    user_elf = os.path.join(BUILD, "user_shell.elf")
-    user_bin = os.path.join(BUILD, "user_shell.bin")
-    user_obj = os.path.join(BUILD, "user_shell_bin.o")
+USER_FLAGS = [
+    "-target", "x86_64-freestanding",
+    "-ffreestanding", "-fno-builtin",
+    "-fno-sanitize=all",
+    "-fno-asynchronous-unwind-tables", "-fno-unwind-tables",
+    "-fno-pic", "-fno-pie", "-fno-stack-protector",
+    "-mno-red-zone", "-mno-mmx", "-mno-sse", "-mno-sse2", "-mno-avx",
+    "-mcmodel=large", "-O2",
+]
 
-    run([zig, "cc"] + user_flags + [
+CRT0 = os.path.join(ROOT, "userspace", "crt0.S")
+SHELL_C = os.path.join(ROOT, "userspace", "shell.c")
+
+# Placeholder until Task 5 adds userspace/hello.c. Building the second blob
+# from the shell sources keeps it a valid, nonempty flat binary with the new
+# user_main entry point; Task 5 replaces this list with [CRT0, HELLO_C].
+USER_HELLO_SOURCES = [CRT0, SHELL_C]
+
+
+def build_user_blob(zig, objcopy, name, sources):
+    """Build one freestanding flat binary and its objcopy symbol object."""
+    user_elf = os.path.join(BUILD, name + ".elf")
+    user_bin = os.path.join(BUILD, name + ".bin")
+    user_obj = os.path.join(BUILD, name + "_bin.o")
+
+    run([zig, "cc"] + USER_FLAGS + [
         "-nostdlib",
         "-Wl,-T," + os.path.join(ROOT, "userspace", "link.ld"),
         "-Wl,-e,_start",
         "-Wl,--build-id=none",
         "-Wl,-z,noexecstack",
         "-o", user_elf,
-        os.path.join(ROOT, "userspace", "crt0.S"),
-        os.path.join(ROOT, "userspace", "shell.c"),
-    ])
+    ] + sources)
     run([objcopy, "-O", "binary", user_elf, user_bin])
 
     # Run from BUILD so objcopy derives the plain basename symbols:
-    # _binary_user_shell_bin_{start,end,size}
+    # _binary_<name>_bin_{start,end,size}
     run([objcopy, "-I", "binary", "-O", "elf64-x86-64",
          "-B", "i386:x86-64",
          "--rename-section", ".data=.userblob,alloc,load,readonly,data,contents",
-         "user_shell.bin", user_obj], cwd=BUILD)
+         os.path.basename(user_bin), user_obj], cwd=BUILD)
 
     size = os.path.getsize(user_bin)
     if size == 0:
-        raise BuildError("ring-3 shell blob is empty")
+        raise BuildError("ring-3 %s blob is empty" % name)
     log("USER BLOB  %s (%d bytes)" % (rel(user_bin), size))
     return user_bin, user_obj
 
 
-def link_kernel(zig, objs, user_obj):
+def build_user_shell(zig, objcopy):
+    return build_user_blob(zig, objcopy, "user_shell", [CRT0, SHELL_C])
+
+
+def build_user_hello(zig, objcopy):
+    return build_user_blob(zig, objcopy, "user_hello", USER_HELLO_SOURCES)
+
+
+def link_kernel(zig, objs, user_objs):
     kernel_elf = os.path.join(BUILD, "os_kernel.elf")
     run([zig, "cc"] + CC64 + [
         "-nostdlib",
@@ -200,7 +228,7 @@ def link_kernel(zig, objs, user_obj):
         "-Wl,--build-id=none",
         "-Wl,-z,noexecstack",
         "-o", kernel_elf,
-    ] + objs + [user_obj])
+    ] + objs + user_objs)
     return kernel_elf
 
 
@@ -403,11 +431,13 @@ def main(argv):
     log("\n[1/5] compiling kernel and libc objects")
     objs = compile_kernel(zig)
 
-    log("\n[2/5] building ring-3 shell")
-    _, user_obj = build_user_shell(zig, objcopy)
+    log("\n[2/5] building ring-3 user blobs")
+    _, shell_obj = build_user_shell(zig, objcopy)
+    _, hello_obj = build_user_hello(zig, objcopy)
+    verify_user_hello_blob()
 
     log("\n[3/5] linking 64-bit kernel")
-    kernel_elf = link_kernel(zig, objs, user_obj)
+    kernel_elf = link_kernel(zig, objs, [shell_obj, hello_obj])
     verify_kernel_elf(kernel_elf)
     verify_no_vector_code(kernel_elf, objcopy)
 
