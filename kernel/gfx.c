@@ -261,12 +261,26 @@ void gfx_present_dirty(void) {
     gfx_dirty_reset();
 }
 
+int gui_is_active(void);
+void gui_frame_tick(void);
+
+int gfx_frame_pending(void) { return 0; }
+void gfx_frame_ack(void) { }
+
 void gfx_tick_100hz(void) {
     static uint32_t acc;
+    static uint32_t frame_div;
     if (!g_gfx_ready) return;
     acc += 60;
     if (acc < 100) return;
     acc -= 100;
+    if (gui_is_active()) {
+        if (++frame_div >= 6) { /* ~10 fps to avoid starving shell in QEMU */
+            frame_div = 0;
+            gui_frame_tick();
+        }
+        return;
+    }
     if (g_dirty_full || g_dirty_n > 0)
         gfx_present_dirty();
 }

@@ -3,6 +3,7 @@
 
 #include "mouse.h"
 #include "compositor.h"
+#include "gui.h"
 
 static int tests_passed;
 static int tests_failed;
@@ -101,12 +102,28 @@ static void test_comp_composite(void) {
     CHECK(g > 0, "green channel present from w2");
 }
 
+static void test_gui_helpers(void) {
+    printf("\n=== Test 5: gui easing/hit helpers ===\n");
+    CHECK(gui_ease_out(0) == 0, "ease start");
+    CHECK(gui_ease_out(256) == 256, "ease end");
+    CHECK(gui_ease_out(128) > 128, "ease-out mid > linear");
+    CHECK(gui_spring(0) == 0, "spring start");
+    CHECK(gui_spring(256) == 256, "spring end");
+    struct comp_window w = {0};
+    w.x = 100; w.y = 100; w.w = 200; w.h = 150;
+    CHECK(gui_hit_test_titlebar(&w, 150, 110), "titlebar hit");
+    CHECK(!gui_hit_test_titlebar(&w, 150, 140), "below titlebar");
+    CHECK(gui_hit_test_close(&w, 118, 114), "close hit");
+    CHECK(!gui_hit_test_close(&w, 150, 114), "close miss");
+}
+
 int main(void) {
     printf("ARC OS gui test (kernel gui/mouse)\n");
     test_mouse_decode();
     test_mouse_clamp_accel();
     test_comp_zorder_hit();
     test_comp_composite();
+    test_gui_helpers();
     printf("\n=== Results ===\n");
     printf("  passed: %d\n", tests_passed);
     printf("  failed: %d\n", tests_failed);

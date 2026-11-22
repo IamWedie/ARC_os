@@ -35,3 +35,15 @@ uint32_t gfx_blend_premul(uint32_t src_premul, uint32_t dst) {
     if (ob > 255) ob = 255;
     return (oa << 24) | (or_ << 16) | (og << 8) | ob;
 }
+void* pmm_alloc_pages(unsigned long long count) { (void)count; return (void*)0; }
+void pmm_free_pages(void* addr, unsigned long long count) { (void)addr; (void)count; }
+struct gfx_fb* gfx_fb_get(void);
+unsigned int gfx_rgba(unsigned char r, unsigned char g, unsigned char b, unsigned char a) { return ((unsigned)a<<24)|((unsigned)r<<16)|((unsigned)g<<8)|b; }
+void gfx_present(const struct gfx_rect* rect) { (void)rect; }
+void gfx_clear(unsigned int color) { (void)color; }
+void gfx_fill_rect(int x,int y,int w,int h,unsigned int color){(void)x;(void)y;(void)w;(void)h;(void)color;}
+void gfx_fill_rect_alpha(int x,int y,int w,int h,unsigned int c){(void)x;(void)y;(void)w;(void)h;(void)c;}
+struct gfx_font;
+const struct gfx_font* gfx_font_get(unsigned char size){(void)size; return (const struct gfx_font*)0;}
+int gfx_draw_text(const struct gfx_font* f,int x,int y,const char* t,unsigned int c){(void)f;(void)x;(void)y;(void)t;(void)c; return 0;}
+int gfx_draw_char(const struct gfx_font* f,int x,int y,char c,unsigned int color){(void)f;(void)x;(void)y;(void)c;(void)color; return 0;}

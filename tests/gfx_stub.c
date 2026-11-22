@@ -15,3 +15,5 @@ void pmm_reserve_range(uint64_t base, uint64_t len) { (void)base; (void)len; }
 void vmm_map_page(uint64_t vaddr, uint64_t paddr, uint8_t flags) {
     (void)vaddr; (void)paddr; (void)flags;
 }
+void gui_frame_tick(void) { }
+int gui_is_active(void) { return 0; }

@@ -1,6 +1,7 @@
 #include "kernel.h"
 #include "gfx.h"
 #include "mouse.h"
+#include "gui.h"
 
 extern void gdt_init(void);
 extern void idt_init(void);
@@ -22,19 +23,9 @@ void kernel_main(uint64_t multiboot_addr) {
     kmem_init_early();
 
     if (gfx_init() == 0) {
-        struct gfx_fb* fb = gfx_fb_get();
-        /* Gradient wallpaper: top (20,40,90) to bottom (40,80,140). */
-        for (uint32_t y = 0; y < fb->height; y++) {
-            uint8_t r = (uint8_t)(20 + (20 * y) / fb->height);
-            uint8_t g = (uint8_t)(40 + (40 * y) / fb->height);
-            uint8_t b = (uint8_t)(90 + (50 * y) / fb->height);
-            gfx_fill_rect(0, (int)y, (int)fb->width, 1, gfx_rgba(r, g, b, 255));
-        }
-        /* Test rectangle and anti-aliased text for M1 gate. */
-        gfx_fill_rect(100, 100, 200, 100, gfx_rgba(200, 40, 40, 255));
-        gfx_draw_text(gfx_font_get(24), 100, 250, "ARC OS M1", gfx_rgba(255, 255, 255, 255));
         uint32_t t0_lo, t0_hi, t1_lo, t1_hi;
         __asm__ volatile("rdtsc" : "=a"(t0_lo), "=d"(t0_hi));
+        gfx_clear(gfx_rgba(20, 40, 90, 255));
         gfx_present(NULL);
         __asm__ volatile("rdtsc" : "=a"(t1_lo), "=d"(t1_hi));
         gfx_dirty_reset();
@@ -70,7 +61,12 @@ void kernel_main(uint64_t multiboot_addr) {
     ata_init();
     fs_init();
     exec_install_programs();
-    
+
+    if (gfx_ready()) {
+        gui_start(gfx_fb_get());
+        terminal_putstring("GUI: desktop initialized\n");
+    }
+
     /* Print system info */
     terminal_putstring("Kernel loaded at ");
     terminal_print_hex(0x100000);
@@ -99,6 +95,10 @@ void kernel_main(uint64_t multiboot_addr) {
 
     /* Process 0 (kernel) becomes the idle loop and resource reaper. */
     while (1) {
+        if (gfx_frame_pending()) {
+            gfx_frame_ack();
+            gui_frame_tick();
+        }
         scheduler_reap_zombies();
         __asm__ volatile("hlt");
     }

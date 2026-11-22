@@ -35,6 +35,8 @@ int  gfx_dirty_count(void);
 const struct gfx_rect* gfx_dirty_rects(int* count, int* full);
 void gfx_dirty_reset(void);
 void gfx_tick_100hz(void);
+int gfx_frame_pending(void);
+void gfx_frame_ack(void);
 
 /* Font rendering (M1, 8-bit coverage alpha blend) */
 struct gfx_glyph {
