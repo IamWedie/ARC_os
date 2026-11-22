@@ -26,6 +26,9 @@ struct gui_window {
     char text[256];
     int text_len;
     int closing;
+    int minimized;
+    int anim_t;      /* 0..256 */
+    int anim_dir;    /* 1 opening, -1 closing/minimizing, 0 steady */
     int focused;
 };
 
@@ -58,6 +61,7 @@ void gui_tick(struct gui_state* g, struct gfx_fb* fb);
 void gui_handle_mouse(struct gui_state* g, int x, int y, uint8_t buttons);
 int gui_hit_test_titlebar(const struct comp_window* win, int px, int py);
 int gui_hit_test_close(const struct comp_window* win, int px, int py);
+int gui_hit_test_minimize(const struct comp_window* win, int px, int py);
 int gui_handle_key(char c);
 /* easing: t in 0..256 fixed point, returns 0..256 */
 int gui_ease_out(int t);

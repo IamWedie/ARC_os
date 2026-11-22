@@ -59,6 +59,7 @@ struct comp_window* comp_create_window(struct compositor* c, int x, int y, int w
     win->h = h;
     win->surface = surface;
     win->flags = COMP_WIN_VISIBLE;
+    win->alpha = 255;
     c->zorder[c->zcount++] = slot;
     return win;
 }
@@ -137,6 +138,7 @@ void comp_composite(const struct compositor* c, struct gfx_fb* fb, const struct 
         struct gfx_rect wrect = {win->x, win->y, win->w, win->h};
         struct gfx_rect isect;
         if (!rect_intersect(&clip, &wrect, &isect)) continue;
+        uint32_t wa = win->alpha;
         for (int y = isect.y; y < isect.y + isect.h; y++) {
             int sy = y - win->y;
             int sx0 = isect.x - win->x;
@@ -145,6 +147,14 @@ void comp_composite(const struct compositor* c, struct gfx_fb* fb, const struct 
             for (int x = 0; x < isect.w; x++) {
                 uint32_t s = src_row[x];
                 uint32_t sa = (s >> 24) & 0xFFu;
+                if (wa != 255) {
+                    if (sa == 0) continue;
+                    sa = (sa * wa + 127u) / 255u;
+                    uint32_t sr = (((s >> 16) & 0xFFu) * wa + 127u) / 255u;
+                    uint32_t sg = (((s >> 8) & 0xFFu) * wa + 127u) / 255u;
+                    uint32_t sb = ((s & 0xFFu) * wa + 127u) / 255u;
+                    s = (sa << 24) | (sr << 16) | (sg << 8) | sb;
+                }
                 if (sa == 255) dst_row[x] = s;
                 else if (sa != 0) dst_row[x] = gfx_blend_premul(s, dst_row[x]);
             }

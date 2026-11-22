@@ -153,6 +153,13 @@ int gui_hit_test_close(const struct comp_window* win, int px, int py) {
     return px >= bx && px < bx + 12 && py >= by && py < by + 12;
 }
 
+int gui_hit_test_minimize(const struct comp_window* win, int px, int py) {
+    if (!win) return 0;
+    int bx = win->x + 32;
+    int by = win->y + 8;
+    return px >= bx && px < bx + 12 && py >= by && py < by + 12;
+}
+
 static void draw_wallpaper(struct gfx_fb* fb, uint32_t* cache) {
     if (!fb || !fb->pixels) return;
     if (cache) {
@@ -447,6 +454,7 @@ static struct gui_window* gui_open_app(struct gui_state* g, enum gui_app app) {
     /* focus existing */
     for(int i=0;i<g->win_count;i++) if(g->wins[i].app==app) {
         g->focused_id=g->wins[i].comp_id;
+        if (g->wins[i].minimized) { g->wins[i].minimized = 0; g->wins[i].anim_dir = 1; }
         comp_bring_to_front(&g->comp, g->wins[i].comp_id);
         return &g->wins[i];
     }
@@ -459,7 +467,8 @@ static struct gui_window* gui_open_app(struct gui_state* g, enum gui_app app) {
     struct comp_window* cw = comp_create_window(&g->comp,x,y,w,h,surf);
     if(!cw){ pmm_free_pages(surf,pages); return 0; }
     struct gui_window* gw = &g->wins[g->win_count++];
-    gw->comp_id=cw->id; gw->app=app; gw->closing=0; gw->focused=1;
+    gw->comp_id=cw->id; gw->app=app; gw->closing=0; gw->minimized=0; gw->focused=1;
+    gw->anim_t=0; gw->anim_dir=1;
     gw->text_len=0; gw->text[0]=0;
     const char* t="Window";
     if(app==GUI_APP_ABOUT) t="About";
@@ -588,7 +597,23 @@ void gui_handle_mouse(struct gui_state* g, int x, int y, uint8_t buttons) {
             comp_bring_to_front(&g->comp, hit);
             struct comp_window* cw = comp_find(&g->comp, hit);
             if (cw && gui_hit_test_close(cw, x, y)) {
-                gui_remove_window(g, hit);
+                for (int wi=0; wi<g->win_count; wi++) {
+                    if (g->wins[wi].comp_id == hit && !g->wins[wi].closing) {
+                        g->wins[wi].closing = 1;
+                        g->wins[wi].anim_dir = -1;
+                        if (g->wins[wi].anim_t > 256) g->wins[wi].anim_t = 256;
+                    }
+                }
+                g->prev_buttons=buttons; g->mouse_buttons=buttons; return;
+            }
+            if (cw && gui_hit_test_minimize(cw, x, y)) {
+                for (int wi=0; wi<g->win_count; wi++) {
+                    if (g->wins[wi].comp_id == hit && !g->wins[wi].minimized) {
+                        g->wins[wi].minimized = 1;
+                        g->wins[wi].anim_dir = -1;
+                        if (g->wins[wi].anim_t > 256) g->wins[wi].anim_t = 256;
+                    }
+                }
                 g->prev_buttons=buttons; g->mouse_buttons=buttons; return;
             }
             if (cw && gui_hit_test_titlebar(cw, x, y)) {
@@ -618,6 +643,31 @@ void gui_tick(struct gui_state* g, struct gfx_fb* fb) {
 
     struct mouse_state ms = mouse_get_state();
     gui_handle_mouse(g, ms.x, ms.y, ms.buttons);
+
+    /* advance animations (open/close/minimize) */
+    for (int i = g->win_count - 1; i >= 0; i--) {
+        struct gui_window* gw = &g->wins[i];
+        if (gw->anim_dir != 0) {
+            gw->anim_t += gw->anim_dir * 32;
+            if (gw->anim_t >= 256) { gw->anim_t = 256; if (gw->anim_dir > 0) gw->anim_dir = 0; }
+            if (gw->anim_t <= 0) {
+                gw->anim_t = 0;
+                if (gw->closing) { gui_remove_window(g, gw->comp_id); continue; }
+                if (gw->minimized) { gw->anim_dir = 0; }
+            }
+        }
+        struct comp_window* cw = comp_find(&g->comp, gw->comp_id);
+        if (cw) {
+            int t = gw->anim_t;
+            int eased = gw->anim_dir > 0 ? gui_spring(t) : gui_ease_out(t);
+            int alpha = (eased * 255) / 256;
+            if (alpha < 0) alpha = 0;
+            if (alpha > 255) alpha = 255;
+            cw->alpha = (uint8_t)alpha;
+            if (gw->minimized && gw->anim_dir == 0 && gw->anim_t == 0) cw->flags &= ~COMP_WIN_VISIBLE;
+            else cw->flags |= COMP_WIN_VISIBLE;
+        }
+    }
 
     draw_wallpaper(fb, g->wallpaper);
     /* redraw window contents (simple) */

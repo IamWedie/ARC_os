@@ -21,7 +21,7 @@
 - [x] Step 3: basic visual layer (rounded corners, title bar, traffic lights)
 - [x] Step 4: menu bar (translucent, 28 px, logo/app name/clock)
 - [x] Step 5: dock (centered pill, hover magnification, running indicator)
-- [ ] Step 6: animations (ease-out/spring open/close/minimize)
+- [x] Step 6: animations (ease-out/spring open/close/minimize)
 - [x] Step 7: built-in apps (About, Notes, Files, System Monitor)
 - [x] Step 8: keyboard routing (focused text field gets keys, else shell)
 - [x] Host tests: tests/test_gui.c suite 13 extended

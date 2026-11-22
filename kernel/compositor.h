@@ -12,6 +12,7 @@ struct comp_window {
     int w, h;
     uint32_t* surface; /* ARGB8888 premultiplied, row stride = w */
     uint32_t flags;
+    uint8_t alpha;
     uint8_t used;
 };
 
