@@ -45,6 +45,8 @@ struct gui_state {
     uint32_t fps_last_sec;
     /* cached wallpaper */
     uint32_t* wallpaper;
+    /* cached menu bar blur strip (width * GUI_MENU_H) */
+    uint32_t* menubar_blur;
 };
 
 void gui_init(struct gui_state* g, struct gfx_fb* fb);

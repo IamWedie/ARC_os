@@ -287,8 +287,9 @@ static void draw_menu_bar(struct gfx_fb* fb, struct gui_state* g) {
     int w = (int)fb->width;
     for (int y = 0; y < GUI_MENU_H && y < (int)fb->height; y++) {
         uint32_t* row = fb->pixels + y * fb->width;
+        uint32_t* blur = (g && g->menubar_blur) ? (g->menubar_blur + y * w) : 0;
         for (int x = 0; x < w; x++) {
-            uint32_t bg = row[x];
+            uint32_t bg = blur ? blur[x] : row[x];
             /* translucent white overlay ~0.75 alpha premul */
             uint32_t overlay = 0xBFFFFFFFu; /* premul white a=191 */
             row[x] = gfx_blend_premul(overlay, bg);
@@ -472,12 +473,78 @@ static struct gui_window* gui_open_app(struct gui_state* g, enum gui_app app) {
     return gw;
 }
 
+static void gui_build_menubar_blur(struct gui_state* g, struct gfx_fb* fb) {
+    if (!g || !fb || !g->wallpaper) return;
+    int w = (int)fb->width;
+    int h = GUI_MENU_H;
+    size_t bytes = (size_t)w * h * 4;
+    size_t pages = (bytes + 4095) / 4096;
+    g->menubar_blur = (uint32_t*)pmm_alloc_pages(pages);
+    if (!g->menubar_blur) return;
+    /* downscale by 4, box blur, upscale - cached blur-behind */
+    int sw = (w + 3) / 4;
+    int sh = (h + 3) / 4;
+    size_t sbytes = (size_t)sw * sh * 4;
+    size_t spages = (sbytes + 4095) / 4096;
+    uint32_t* small = (uint32_t*)pmm_alloc_pages(spages);
+    uint32_t* tmp = (uint32_t*)pmm_alloc_pages(spages);
+    if (!small || !tmp) {
+        if (small) pmm_free_pages(small, spages);
+        if (tmp) pmm_free_pages(tmp, spages);
+        /* fallback: copy wallpaper strip */
+        for (int y = 0; y < h; y++)
+            for (int x = 0; x < w; x++)
+                g->menubar_blur[y*w+x] = g->wallpaper[y*(int)fb->width+x];
+        return;
+    }
+    for (int y = 0; y < sh; y++) {
+        for (int x = 0; x < sw; x++) {
+            int r=0,gv=0,b=0,c=0;
+            for (int dy=0; dy<4; dy++) for (int dx=0; dx<4; dx++) {
+                int sxp = x*4+dx; int syp = y*4+dy;
+                if (sxp >= w) sxp = w - 1;
+                if (syp >= h) syp = h - 1;
+                uint32_t p = g->wallpaper[syp*w + sxp];
+                r += (p>>16)&0xFF; gv += (p>>8)&0xFF; b += p&0xFF; c++;
+            }
+            small[y*sw+x] = gfx_rgba((uint8_t)(r/c),(uint8_t)(gv/c),(uint8_t)(b/c),255);
+        }
+    }
+    /* simple 2-pass box blur radius 1 on small */
+    for (int pass=0; pass<2; pass++) {
+        uint32_t* src = (pass==0)?small:tmp;
+        uint32_t* dst = (pass==0)?tmp:small;
+        for (int y=0;y<sh;y++) for(int x=0;x<sw;x++){
+            int r=0,gv=0,b=0,c=0;
+            for(int dy=-1;dy<=1;dy++) for(int dx=-1;dx<=1;dx++){
+                int nx=x+dx, ny=y+dy;
+                if (nx < 0) nx = 0;
+                if (nx >= sw) nx = sw - 1;
+                if (ny < 0) ny = 0;
+                if (ny >= sh) ny = sh - 1;
+                uint32_t p=src[ny*sw+nx];
+                r+=(p>>16)&0xFF; gv+=(p>>8)&0xFF; b+=p&0xFF; c++;
+            }
+            dst[y*sw+x]=gfx_rgba((uint8_t)(r/c),(uint8_t)(gv/c),(uint8_t)(b/c),255);
+        }
+    }
+    /* upscale back */
+    for (int y=0;y<h;y++) for(int x=0;x<w;x++){
+        int sxp=x/4, syp=y/4;
+        if (sxp >= sw) sxp = sw - 1;
+        if (syp >= sh) syp = sh - 1;
+        g->menubar_blur[y*w+x]=small[syp*sw+sxp];
+    }
+    pmm_free_pages(small, spages);
+    pmm_free_pages(tmp, spages);
+}
+
 void gui_init(struct gui_state* g, struct gfx_fb* fb) {
     if(!g) return;
     comp_init(&g->comp);
     g->win_count=0; g->focused_id=0; g->mouse_x=fb?fb->width/2:960; g->mouse_y=fb?fb->height/2:540;
     g->mouse_buttons=0; g->prev_buttons=0; g->drag_win=-1; g->cursor_visible=1;
-    g->frame=0; g->fps=0; g->fps_frames=0; g->fps_last_sec=0; g->wallpaper=0;
+    g->frame=0; g->fps=0; g->fps_frames=0; g->fps_last_sec=0; g->wallpaper=0; g->menubar_blur=0;
     if(fb && fb->pixels) {
         size_t bytes = (size_t)fb->width*fb->height*4;
         size_t pages=(bytes+4095)/4096;
@@ -491,6 +558,7 @@ void gui_init(struct gui_state* g, struct gfx_fb* fb) {
                 for(uint32_t x=0;x<fb->width;x++) g->wallpaper[y*fb->width+x]=c;
             }
         }
+        gui_build_menubar_blur(g, fb);
     }
     gui_open_app(g, GUI_APP_ABOUT);
 }
