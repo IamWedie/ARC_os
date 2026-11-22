@@ -174,11 +174,9 @@ USER_FLAGS = [
 
 CRT0 = os.path.join(ROOT, "userspace", "crt0.S")
 SHELL_C = os.path.join(ROOT, "userspace", "shell.c")
+HELLO_C = os.path.join(ROOT, "userspace", "hello.c")
 
-# Placeholder until Task 5 adds userspace/hello.c. Building the second blob
-# from the shell sources keeps it a valid, nonempty flat binary with the new
-# user_main entry point; Task 5 replaces this list with [CRT0, HELLO_C].
-USER_HELLO_SOURCES = [CRT0, SHELL_C]
+USER_HELLO_SOURCES = [CRT0, HELLO_C]
 
 
 def build_user_blob(zig, objcopy, name, sources):

@@ -18,6 +18,7 @@
 #define SYS_CLEAR 12
 #define SYS_FORK 14
 #define SYS_WAIT 15
+#define SYS_EXEC 16
 
 /* Open flags (must match kernel.h) */
 #define O_RDONLY 0x0000
@@ -63,6 +64,9 @@ static long syscall4(long n, long a1, long a2, long a3) {
 
 static long sys_fork(void) { return syscall4(14, 0, 0, 0); }
 static long sys_wait(int* s) { return syscall4(15, (long)s, 0, 0); }
+static long sys_exec(const char* path, char* const argv[]) {
+    return syscall4(SYS_EXEC, (long)path, (long)argv, 0);
+}
 
 static void print_str(const char* s) {
     long len = 0;
@@ -95,6 +99,7 @@ static void run_command(const char* cmd) {
         print_str("  truncate <file>     - Empty a file\n");
         print_str("  rm <file>           - Delete a file\n");
         print_str("  forktest            - Prove fork/wait with a child\n");
+        print_str("  execdemo            - Prove fork -> exec -> wait with hello.bin\n");
         print_str("  exit                - Exit shell\n");
         return;
     }
@@ -118,6 +123,25 @@ static void run_command(const char* cmd) {
             print_str("fork: wait ok\n");
         else
             print_str("fork: wait bad\n");
+        return;
+    }
+
+    if (starts_with(cmd, "execdemo")) {
+        print_str("exec: parent\n");
+        long pid = sys_fork();
+        if (pid == 0) {
+            char* argv[] = {"hello.bin", "alpha", 0};
+            sys_exec("hello.bin", argv);
+            print_str("exec: failed\n");
+            syscall4(SYS_EXIT, 9, 0, 0);
+            return;
+        }
+        int status = -1;
+        sys_wait(&status);
+        if (status == 0)
+            print_str("exec: wait ok\n");
+        else
+            print_str("exec: wait bad\n");
         return;
     }
 
