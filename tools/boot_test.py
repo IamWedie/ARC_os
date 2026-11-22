@@ -90,6 +90,8 @@ def main():
         "-kernel", OS_ELF,
         "-m", "512M",
         "-display", "none",
+        "-vga", "none",
+        "-device", "bochs-display,vgamem=67108864",
         "-serial", "tcp:127.0.0.1:%d,server=on,wait=on" % port,
         "-monitor", "none",
         "-no-reboot",
@@ -123,6 +125,8 @@ def main():
             if proc.poll() is not None:
                 break
             time.sleep(0.05)
+    if sock is not None:
+        sock.settimeout(None)
     if sock is None:
         proc.terminate()
         try:
@@ -203,6 +207,11 @@ def main():
     print("--- serial console ---")
     print(text, end="" if text.endswith("\n") else "\n")
     print("--- end serial console ---")
+    qlog = b"".join(qemu_log).decode("utf-8", "replace")
+    if qlog.strip():
+        print("--- qemu log ---")
+        print(qlog, end="" if qlog.endswith("\n") else "\n")
+        print("--- end qemu log ---")
 
     missing = [m for m in markers if m not in text]
     forbidden = [m for m in args.expect_not if m in text]

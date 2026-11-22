@@ -52,6 +52,7 @@ struct pmm_region {
 void pmm_init(uint64_t multiboot_addr);
 void* pmm_alloc_pages(size_t count);
 void pmm_free_pages(void* addr, size_t count);
+void pmm_reserve_range(uint64_t base, uint64_t len);
 uint64_t pmm_total_mem(void);
 uint64_t pmm_free_mem(void);
 uint32_t pmm_region_count_get(void);

@@ -1,4 +1,5 @@
 #include "kernel.h"
+#include "gfx.h"
 
 extern void gdt_init(void);
 extern void idt_init(void);
@@ -18,6 +19,30 @@ void kernel_main(uint64_t multiboot_addr) {
     pmm_init(multiboot_addr);
     vmm_init();
     kmem_init_early();
+
+    if (gfx_init() == 0) {
+        struct gfx_fb* fb = gfx_fb_get();
+        /* Gradient wallpaper: top (20,40,90) to bottom (40,80,140). */
+        for (uint32_t y = 0; y < fb->height; y++) {
+            uint8_t r = (uint8_t)(20 + (20 * y) / fb->height);
+            uint8_t g = (uint8_t)(40 + (40 * y) / fb->height);
+            uint8_t b = (uint8_t)(90 + (50 * y) / fb->height);
+            gfx_fill_rect(0, (int)y, (int)fb->width, 1, gfx_rgba(r, g, b, 255));
+        }
+        /* Test rectangle and anti-aliased text for M1 gate. */
+        gfx_fill_rect(100, 100, 200, 100, gfx_rgba(200, 40, 40, 255));
+        gfx_draw_text(gfx_font_get(24), 100, 250, "ARC OS M1", gfx_rgba(255, 255, 255, 255));
+        uint32_t t0_lo, t0_hi, t1_lo, t1_hi;
+        __asm__ volatile("rdtsc" : "=a"(t0_lo), "=d"(t0_hi));
+        gfx_present(NULL);
+        __asm__ volatile("rdtsc" : "=a"(t1_lo), "=d"(t1_hi));
+        gfx_dirty_reset();
+        uint64_t t0 = ((uint64_t)t0_hi << 32) | t0_lo;
+        uint64_t t1 = ((uint64_t)t1_hi << 32) | t1_lo;
+        terminal_putstring("GFX: frame redraw cycles=");
+        terminal_print_int(t1 - t0);
+        terminal_putstring("\n");
+    }
 
     acpi_init();
 
