@@ -88,6 +88,14 @@ ata_irq_stub:
     POPREGS
     iretq
 
+.globl irq12_stub
+.type irq12_stub, @function
+irq12_stub:
+    PUSHREGS
+    call mouse_irq_handler
+    POPREGS
+    iretq
+
 /*
  * Local APIC timer preemption point (vector 0x40). Mirrors irq0_stub:
  * passes its stack pointer to apic_timer_handler and context switches on

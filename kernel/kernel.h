@@ -180,6 +180,7 @@ void outb(uint16_t port, uint8_t val);
 uint8_t inb(uint16_t port);
 void irq0_stub(void);
 void irq1_stub(void);
+void irq12_stub(void);
 void serial_irq_stub(void);
 uint64_t irq0_handler(uint64_t rsp);
 int kbd_getchar(void);

@@ -1,5 +1,6 @@
 #include "kernel.h"
 #include "gfx.h"
+#include "mouse.h"
 
 extern void gdt_init(void);
 extern void idt_init(void);
@@ -60,6 +61,7 @@ void kernel_main(uint64_t multiboot_addr) {
     lapic_timer_start();
     /* Route device IRQs through the IOAPIC (masks the PIC + ExtINT). */
     ioapic_init();
+    mouse_init();
     /* The PIT now drives IRQ0 as a background clock; the LAPIC is the tick. */
     pit_init();
     /* Mask PIT IRQ0 in the PIC (no-op once the IOAPIC disabled the PIC). */

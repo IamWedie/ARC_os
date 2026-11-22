@@ -122,6 +122,7 @@ void interrupts_init(void) {
     idt_set_gate(33, (uint64_t)irq1_stub, 0x08, 0x8E);
     idt_set_gate(36, (uint64_t)serial_irq_stub, 0x08, 0x8E);  /* COM1 RX */
     idt_set_gate(0x40, (uint64_t)apic_timer_stub, 0x08, 0x8E);
+    idt_set_gate(44, (uint64_t)irq12_stub, 0x08, 0x8E);  /* PS/2 mouse IRQ12 */
     idt_set_gate(46, (uint64_t)ata_irq_stub, 0x08, 0x8E);  /* ATA IRQ14 */
 
     /* Kernel-only software yield (ring 0 interrupt gate). */
