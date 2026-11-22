@@ -198,6 +198,13 @@ int exec_stub_slot_for(const char* name) {
     return -1;
 }
 
+int exec_stub_set_slot_size(const char* name, uint32_t size) {
+    int slot = exec_stub_slot_for(name);
+    if (slot < 0) return -1;
+    stub_slots[slot].size = size;
+    return 0;
+}
+
 int fs_find_slot(const char* name) { return exec_stub_slot_for(name); }
 
 static int stub_slot_valid(int slot) {

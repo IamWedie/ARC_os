@@ -120,3 +120,150 @@ fail:
     pmm_free_pages(code, code_pages);
     return -1;
 }
+
+/* ------------------------------------------------------------------ */
+/* SYS_EXEC: checked user arguments + live trap frame rewrite          */
+/* ------------------------------------------------------------------ */
+
+#define EXEC_PT_ADDR_MASK 0x000FFFFFFFFFF000ULL
+#define EXEC_PAGE_MASK    (~(uint64_t)4095ULL)
+
+/*
+ * Copy `len` bytes from a user VA whose every 4 KiB page must have a present,
+ * user-accessible leaf in the caller's root. There is no page-fault handler,
+ * so an unchecked dereference here would fault in kernel mode. The physical
+ * leaf address is identity-mapped in the kernel's slot 0.
+ */
+static int exec_read_user(uint64_t root_phys, uint64_t va, void* dst,
+                          size_t len) {
+    uint8_t* out = (uint8_t*)dst;
+    if (!out && len) return -1;
+    if (len > (size_t)(UINT64_MAX - va)) return -1;
+
+    while (len) {
+        uint64_t page_va = va & EXEC_PAGE_MASK;
+        uint64_t* leaf = pt_lookup((uint64_t*)(uintptr_t)root_phys, page_va);
+        if (!leaf || !(*leaf & PT_PG_PRESENT) || !(*leaf & PT_PG_USER) ||
+            (*leaf & PT_PG_PSE)) return -1;
+
+        uint64_t offset = va & 4095ULL;
+        uint64_t pa = (*leaf & EXEC_PT_ADDR_MASK) + offset;
+        size_t n = (size_t)(4096ULL - offset);
+        if (n > len) n = len;
+        memcpy(out, (const void*)(uintptr_t)pa, n);
+
+        out += n;
+        va += n;
+        len -= n;
+    }
+    return 0;
+}
+
+/* Copy at most cap bytes (including the NUL) from a user C string. */
+static int exec_copy_user_cstr(uint64_t root_phys, uint64_t va, char* buf,
+                               size_t cap) {
+    for (size_t i = 0; i < cap; i++) {
+        char c;
+        if (exec_read_user(root_phys, va + i, &c, 1) != 0) return -1;
+        if (c == '\0') {
+            buf[i] = '\0';
+            return (int)i;
+        }
+        buf[i] = c;
+    }
+    return -1;
+}
+
+/*
+ * Copy at most EXEC_MAX_ARGS user pointers and their strings into kernel stack
+ * buffers. A missing terminator, an overlong/empty string or a bad pointer is
+ * rejected before any process state is touched.
+ */
+static int exec_copy_user_argv(uint64_t root_phys, uint64_t argv_va,
+                               char* argbuf[EXEC_MAX_ARGS],
+                               char storage[EXEC_MAX_ARGS][EXEC_MAX_ARG_LEN + 1],
+                               int* argc_out) {
+    for (int i = 0; i < EXEC_MAX_ARGS; i++) {
+        uint64_t ptr = 0;
+        if (exec_read_user(root_phys,
+                           argv_va + (uint64_t)(size_t)i * 8u,
+                           &ptr, 8) != 0) return -1;
+        if (ptr == 0) {
+            *argc_out = i;
+            return 0;
+        }
+        int len = exec_copy_user_cstr(root_phys, ptr, storage[i],
+                                      EXEC_MAX_ARG_LEN + 1u);
+        if (len <= 0 || len > EXEC_MAX_ARG_LEN) return -1;
+        argbuf[i] = storage[i];
+    }
+    return -1; /* more than EXEC_MAX_ARGS entries, or no NULL terminator */
+}
+
+long sys_exec(const char* path, char* const argv[]) {
+    /* Must be first: a timer here could let another syscall overwrite the
+     * single global frame pointer before this caller has captured it. */
+    preempt_disable();
+
+    int pid = current_process;
+    uint64_t frame_rsp = syscall_frame_rsp;
+    if (pid <= 0 || pid >= MAX_PROCESSES || !processes[pid].user_mode ||
+        frame_rsp == 0 || !path || !argv) goto fail;
+
+    uint64_t root_phys = processes[pid].pml4_phys;
+    if (!root_phys) goto fail;
+
+    char path_buf[FS_MAX_FILENAME];
+    char arg_storage[EXEC_MAX_ARGS][EXEC_MAX_ARG_LEN + 1];
+    char* argbuf[EXEC_MAX_ARGS];
+    int argc = 0;
+    if (exec_copy_user_cstr(root_phys, (uint64_t)(uintptr_t)path, path_buf,
+                            sizeof(path_buf)) <= 0 ||
+        exec_copy_user_argv(root_phys, (uint64_t)(uintptr_t)argv, argbuf,
+                            arg_storage, &argc) != 0) goto fail;
+
+    int slot = fs_find_slot(path_buf);
+    if (slot < 0) goto fail;
+    int file_size = fs_slot_size(slot);
+    if (file_size <= 0 || (size_t)file_size > (size_t)FS_MAX_FILESIZE ||
+        (size_t)file_size > (size_t)USER_FRAME_PAGES * 4096u) goto fail;
+
+    /* Stage the whole file in fresh frames; exec_load_image copies it into
+     * its own code run and these frames are released on every path. */
+    size_t size = (size_t)file_size;
+    size_t pages = (size + 4095u) / 4096u;
+    uint8_t* image = (uint8_t*)pmm_alloc_pages(pages);
+    if (!image) goto fail;
+
+    size_t off = 0;
+    while (off < size) {
+        int n = fs_slot_read(slot, (uint32_t)off, image + off, size - off);
+        if (n <= 0 || (size_t)n > size - off) goto fail_stage;
+        off += (size_t)n;
+    }
+
+    uint64_t user_rsp = 0;
+    if (exec_load_image(pid, image, size, argbuf, argc, &user_rsp) != 0)
+        goto fail_stage;
+    pmm_free_pages(image, pages);
+
+    /* Commit is complete: close-on-exec cannot fail the exec now. */
+    for (int fd = FD_STDERR + 1; fd < FD_MAX; fd++) {
+        if (processes[pid].fds[fd].kind != FD_ENTRY_FREE) fd_close(pid, fd);
+    }
+
+    syscall_frame_t* frame = (syscall_frame_t*)(uintptr_t)frame_rsp;
+    frame->rip = USER_CODE_VA;
+    frame->user_rsp = user_rsp;
+    frame->rax = 0;
+    frame->ret_slot = 0;
+
+    preempt_enable();
+    return 0;
+
+fail_stage:
+    pmm_free_pages(image, pages);
+fail:
+    preempt_enable();
+    return -1;
+}

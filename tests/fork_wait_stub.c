@@ -199,6 +199,8 @@ static void stub_slot_set_name(stub_slot_t* slot, const char* name) {
     slot->name[i] = '\0';
 }
 
+int fs_find_slot(const char* name) { return fork_wait_stub_slot_for(name); }
+
 int fs_open_slot(const char* name, int create) {
     if (!name || name[0] == '\0') return -1;
 

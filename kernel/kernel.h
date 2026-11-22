@@ -96,6 +96,10 @@ uint64_t exec_build_user_stack(uint8_t* stack_base, size_t stack_bytes,
                                char* const argv[], int argc);
 int exec_load_image(int pid, const uint8_t* image, size_t size,
                     char* const argv[], int argc, uint64_t* user_rsp_out);
+/* Replace the current user image from a checked user-supplied path/argv.
+ * 0 on success (the trap frame now enters the new image), -1 on failure with
+ * no change to the process image, address space, fds or trap frame. */
+long sys_exec(const char* path, char* const argv[]);
 
 /*
  * Page-table walk core (pagetable.c).
@@ -508,6 +512,7 @@ extern const uint8_t _binary_user_shell_bin_size[];
 #define SYS_DUP   13
 #define SYS_FORK  14
 #define SYS_WAIT  15
+#define SYS_EXEC  16
 
 /* Kernel entry */
 void kernel_main(uint64_t multiboot_addr);
