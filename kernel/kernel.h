@@ -77,6 +77,14 @@ int  as_map_user(int pid, uint64_t vaddr, uint64_t paddr,
 int  as_clone(int src_pid, int dst_pid);
 void as_destroy(int pid);
 uint64_t as_root(int pid);
+/*
+ * Atomically install a fresh user half for pid: code_pages at USER_CODE_VA and
+ * stack_pages at USER_STACK_VA, with the master kernel slot shared. Returns 0
+ * on success, -1 on bad arguments or resource failure; on failure the process
+ * keeps its old root and owned[] frames are never touched.
+ */
+int  as_replace_user(int pid, uint64_t code_pa, size_t code_pages,
+                     uint64_t stack_pa, size_t stack_pages);
 
 /*
  * Page-table walk core (pagetable.c).

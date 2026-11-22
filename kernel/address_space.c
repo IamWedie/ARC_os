@@ -141,6 +141,53 @@ int as_clone(int src_pid, int dst_pid) {
     return ctx.failed ? -1 : 0;
 }
 
+/*
+ * Build the replacement user half in a detached root and only publish it once
+ * every mapping succeeded. Zero is not a real frame: rejecting it here keeps a
+ * failed replacement from leaving a bogus present leaf behind. Nothing in this
+ * function touches the process's owned[] frame runs.
+ */
+int as_replace_user(int pid, uint64_t code_pa, size_t code_pages,
+                    uint64_t stack_pa, size_t stack_pages) {
+    if (!as_valid_pid(pid) || !code_pa || !stack_pa) return -1;
+
+    uint64_t old_root_phys = processes[pid].pml4_phys;
+    uint64_t master = vmm_master_root();
+    if (!old_root_phys || !master) return -1;
+
+    void* root = as_alloc_table();
+    if (!root) return -1;
+
+    uint64_t* new_root = (uint64_t*)root;
+    pt_clone_shared((uint64_t*)(uintptr_t)master, new_root);
+
+    for (size_t i = 0; i < code_pages; i++) {
+        if (pt_map(new_root, USER_CODE_VA + (uint64_t)i * 4096ULL,
+                   code_pa + (uint64_t)i * 4096ULL,
+                   PT_PG_RW | PT_PG_USER, &as_ops) != 0)
+            goto fail;
+    }
+    for (size_t i = 0; i < stack_pages; i++) {
+        if (pt_map(new_root, USER_STACK_VA + (uint64_t)i * 4096ULL,
+                   stack_pa + (uint64_t)i * 4096ULL,
+                   PT_PG_RW | PT_PG_USER, &as_ops) != 0)
+            goto fail;
+    }
+
+    processes[pid].pml4_phys = (uint64_t)(uintptr_t)root;
+    vmm_switch_address_space(pid); /* new CR3 before old tables are freed */
+
+    uint64_t* old_root = (uint64_t*)(uintptr_t)old_root_phys;
+    pt_free_user_tables(old_root, &as_ops);
+    as_free_table(old_root);
+    return 0;
+
+fail:
+    pt_free_user_tables(new_root, &as_ops); /* only the detached root's tables */
+    as_free_table(root);
+    return -1;
+}
+
 void as_destroy(int pid) {
     if (!as_valid_pid(pid)) return;
 
