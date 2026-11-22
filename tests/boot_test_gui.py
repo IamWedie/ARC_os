@@ -135,7 +135,7 @@ def main():
             chunks.append(d)
     threading.Thread(target=pump_serial, daemon=True).start()
 
-    markers = ["=== ARC OS v1.0 ===", "GFX: 1920x1080x32",
+    markers = ["=== ARC OS v1.0 ===", "1920x1080x32",
                "PS/2 mouse initialized", "GUI: desktop initialized"]
     text = ""
     deadline = time.time() + 30

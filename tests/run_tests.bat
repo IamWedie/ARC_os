@@ -104,7 +104,7 @@ if errorlevel 1 exit /b 1
 tests\test_gfx.exe
 if errorlevel 1 exit /b 1
 
-echo [13/13] Building and running gui test against real kernel sources...
+echo [13/14] Building and running gui test against real kernel sources...
 "%GCC%" -O2 -Wall -Wextra -std=gnu11 -I kernel ^
     tests\test_gui.c tests\gui_stub.c ^
     kernel\mouse.c kernel\compositor.c kernel\gui.c ^
@@ -112,4 +112,14 @@ echo [13/13] Building and running gui test against real kernel sources...
 if errorlevel 1 exit /b 1
 
 tests\test_gui.exe
+if errorlevel 1 exit /b 1
+
+echo [14/14] Building and running bootinfo/MB2 parser test...
+"%GCC%" -O2 -Wall -Wextra -std=gnu11 -I kernel ^
+    tests\test_bootinfo.c ^
+    kernel\bootinfo.c ^
+    -o tests\test_bootinfo.exe
+if errorlevel 1 exit /b 1
+
+tests\test_bootinfo.exe
 exit /b %errorlevel%

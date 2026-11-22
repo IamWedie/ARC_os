@@ -49,7 +49,7 @@ struct multiboot_info {
     uint32_t framebuffer_height;
     uint8_t framebuffer_bpp;
     uint8_t framebuffer_type;
-    uint8_t color_info[5];
+    uint8_t color_info[6];
 } __attribute__((packed));
 
 #endif

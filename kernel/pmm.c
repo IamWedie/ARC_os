@@ -1,12 +1,13 @@
 /*
  * ARC OS - Physical memory manager.
  *
- * Bitmap over a fixed 16 GiB window of physical memory. The multiboot
- * memory map (or the mem_upper fallback) drives which frames are usable;
- * the low 1 MiB and the resident kernel image are always reserved.
+ * Bitmap over a fixed 16 GiB window of physical memory. The normalized
+ * bootinfo memory map drives which frames are usable; the low 1 MiB and the
+ * resident kernel image are always reserved. M3 hardening: handles
+ * overlaps, holes, reserved/ACPI/NVS regions, >4GiB entries, unsorted maps.
  */
 #include "kernel.h"
-#include "mboot.h"
+#include "bootinfo.h"
 
 #define PMM_PAGE_SIZE      4096ULL
 #define PMM_MAX_PHYS       (16ULL << 30)          /* 16 GiB */
@@ -43,15 +44,16 @@ static inline int pmm_is_free(uint64_t frame) {
     return (pmm_bitmap[frame / 64] >> (frame % 64)) & 1ULL ? 0 : 1;
 }
 
-/* Clamp [base, base+len) to the managed window and mark free (clear). */
 static void pmm_release(uint64_t base, uint64_t len) {
-    if (base >= PMM_MAX_PHYS || len == 0) return;
-    uint64_t end = base + len;
-    if (end > PMM_MAX_PHYS) end = PMM_MAX_PHYS;
-    uint64_t f0 = (base + PMM_PAGE_SIZE - 1) >> 12;
+    uint64_t end;
+    if (len == 0) return;
+    if (base >= PMM_MAX_PHYS) return;
+    end = base + len;
+    if (end < base || end > PMM_MAX_PHYS) end = PMM_MAX_PHYS;
+    if (end <= base) return;
+    uint64_t f0 = base >> 12;
     uint64_t f1 = (end - 1) >> 12;
-    if (f1 < f0) return;
-    for (uint64_t f = pmm_frame_hi(f0); f <= pmm_frame_hi(f1); f++) {
+    for (uint64_t f = f0; f <= pmm_frame_hi(f1); f++) {
         if (!pmm_is_free(f)) {
             pmm_clear(f);
             pmm_free_frames++;
@@ -60,55 +62,60 @@ static void pmm_release(uint64_t base, uint64_t len) {
 }
 
 static void pmm_reserve(uint64_t base, uint64_t len) {
-    if (base >= PMM_MAX_PHYS || len == 0) return;
-    uint64_t end = base + len;
-    if (end > PMM_MAX_PHYS) end = PMM_MAX_PHYS;
-    uint64_t f0 = (base + PMM_PAGE_SIZE - 1) >> 12;
+    uint64_t end;
+    if (len == 0) return;
+    if (base >= PMM_MAX_PHYS) return;
+    end = base + len;
+    if (end < base || end > PMM_MAX_PHYS) end = PMM_MAX_PHYS;
+    if (end <= base) return;
+    uint64_t f0 = base >> 12;
     uint64_t f1 = (end - 1) >> 12;
-    if (f1 < f0) return;
-    for (uint64_t f = pmm_frame_hi(f0); f <= pmm_frame_hi(f1); f++) {
+    for (uint64_t f = f0; f <= pmm_frame_hi(f1); f++) {
         if (pmm_is_free(f)) {
             pmm_set(f);
-            pmm_free_frames--;
+            if (pmm_free_frames) pmm_free_frames--;
         }
     }
 }
 
-void pmm_init(uint64_t multiboot_addr) {
-    struct multiboot_info* mi = (struct multiboot_info*)multiboot_addr;
+void pmm_init(const struct bootinfo* bi) {
     int have_mmap = 0;
 
     for (size_t i = 0; i < PMM_BITMAP_WORDS; i++)
         pmm_bitmap[i] = ~0ULL;
+    pmm_total_frames = 0;
+    pmm_free_frames = 0;
+    pmm_region_count = 0;
 
-    if (mi && (mi->flags & MBOOT_FLAG_MMAP) && mi->mmap_length) {
-        uintptr_t p = mi->mmap_addr;
-        uint32_t left = mi->mmap_length;
-        while (left >= sizeof(struct multiboot_mmap_entry) &&
-               pmm_region_count < PMM_MAX_REGIONS) {
-            struct multiboot_mmap_entry* e =
-                (struct multiboot_mmap_entry*)p;
-            if (e->type == MBOOT_MMAP_AVAILABLE) {
-                pmm_regions[pmm_region_count].base = e->addr;
-                pmm_regions[pmm_region_count].len = e->len;
-                pmm_regions[pmm_region_count].type = e->type;
-                pmm_region_count++;
+    if (bi && (bi->flags & BOOTINFO_FLAG_MMAP) && bi->mmap_count) {
+        have_mmap = 1;
+        /* First pass: release available regions. */
+        for (uint32_t i = 0; i < bi->mmap_count; i++) {
+            const struct bootinfo_mmap_entry* e = &bi->mmap[i];
+            if (e->type == BOOTINFO_MMAP_AVAILABLE) {
+                if (pmm_region_count < PMM_MAX_REGIONS) {
+                    pmm_regions[pmm_region_count].base = e->base;
+                    pmm_regions[pmm_region_count].len = e->len;
+                    pmm_regions[pmm_region_count].type = e->type;
+                    pmm_region_count++;
+                }
                 pmm_total_frames += e->len >> 12;
-                pmm_release(e->addr, e->len);
+                pmm_release(e->base, e->len);
             }
-            uint32_t step = e->size + 4;
-            if (step < 20) break;
-            p += step;
-            left -= (left > step) ? step : left;
-            have_mmap = 1;
+        }
+        /* Second pass: explicitly reserve non-available regions (overlap safety). */
+        for (uint32_t i = 0; i < bi->mmap_count; i++) {
+            const struct bootinfo_mmap_entry* e = &bi->mmap[i];
+            if (e->type != BOOTINFO_MMAP_AVAILABLE)
+                pmm_reserve(e->base, e->len);
         }
     }
 
-    if (!have_mmap && mi && (mi->flags & MBOOT_FLAG_MEM)) {
-        uint64_t upper = (uint64_t)mi->mem_upper * 1024ULL;
+    if (!have_mmap && bi && (bi->flags & BOOTINFO_FLAG_MEM)) {
+        uint64_t upper = bi->mem_upper_kb * 1024ULL;
         pmm_regions[pmm_region_count].base = 0x100000;
         pmm_regions[pmm_region_count].len = upper;
-        pmm_regions[pmm_region_count].type = MBOOT_MMAP_AVAILABLE;
+        pmm_regions[pmm_region_count].type = BOOTINFO_MMAP_AVAILABLE;
         pmm_region_count++;
         pmm_total_frames += upper >> 12;
         pmm_release(0x100000, upper);

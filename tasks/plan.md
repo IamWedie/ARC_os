@@ -269,3 +269,57 @@ cmd /c C:\Users\wadia\ARC_os\tests\run_all.bat
 REM Run interactively (typed input over COM1 stdio)
 qemu-system-x86_64 -kernel C:\Users\wadia\ARC_os\os.elf -nographic -m 512M
 ```
+
+---
+
+## Active Milestone: M3 — Real-hardware boot path (2026-11-22)
+
+**Spec:** `docs/specs/arc-os-24-month-roadmap.md` §M3. Prereq M2 complete.
+
+### Overview
+
+Make the same kernel boot and show the desktop on physical PCs. Add Multiboot2 framebuffer boot path, keep Multiboot1 QEMU `-kernel` path working, abstract display backend, harden PMM/memory map parsing, provide USB image tooling, and add on-screen early debug/panic.
+
+### Architecture Decisions
+
+- **Dual boot protocol**: MB2 header + parser added; MB1 header/parser retained. QEMU `-kernel` may use MB2 when present; kernel must accept both magic values and normalize to a common boot-info struct.
+- **Display backend interface**: `boot_fb` (firmware/MB2 framebuffer) when valid, else fallback to `bochs_dispi` (QEMU). Compositor/GUI uses `gfx_*` only.
+- **No behavior regression**: existing QEMU gates remain green. `tests/run_all.bat` remains frozen.
+- **Real-hardware verification**: cannot execute in this environment; record checklist/results template in `tasks/hardware-log.md`.
+
+### Task List
+
+- [ ] M3.1 Boot-info normalization: `boot_info` struct; parse MB1 and MB2 tags (memory map, framebuffer, cmdline/bootloader name).
+- [ ] M3.2 MB2 header/request tags in boot stub; boot32 passes magic+info; entry64/kernel dispatches by magic.
+- [ ] M3.3 Display backend: `boot_fb` from boot info; `bochs_dispi` fallback; gfx_init uses backend selection.
+- [ ] M3.4 PMM hardening: overlaps, holes, reserved/ACPI/NVS, >4GiB entries, unsorted maps; clamp to managed window.
+- [ ] M3.5 On-screen early debug/panic: framebuffer log region + panic screen with registers/stack trace.
+- [ ] M3.6 `tools/make_usb_image.py` + flashing docs; GRUB config for MB2.
+- [ ] M3.7 Tests/gates: host tests for MB2 parser, PMM map hardening, boot_fb selection; `tests/boot_test_mb2.bat`.
+- [ ] M3.8 Hardware log/checklist and milestone closeout.
+
+### Risks and Mitigations
+
+| Risk | Impact | Mitigation |
+|------|--------|------------|
+| MB2 header placement conflicts with ELF/file layout | High | Place MB2 header in first 32KiB; verify with build script and QEMU |
+| Firmware framebuffer format differs (BGR, non-32bpp) | Medium | Support common 32bpp RGB/BGR; log and fallback/panic clearly |
+| Real firmware memory maps expose PMM bugs | High | Host-test malformed/overlapping/>4GiB maps; reserve reported reserved regions |
+| No real hardware in CI env | Medium | QEMU MB2 gate + documented hardware checklist; do not claim hardware pass |
+
+### Checkpoints
+
+- [x] MB1 gates still pass after MB2 parser/header added
+- [x] `boot_test_mb2.bat` passes in QEMU (MB2 header valid; QEMU 11.x `-kernel` boots MB1 path, kernel normalizes both)
+- [x] Host tests/build/run_all/gui/fork/exec/mb2 gates pass
+
+### Results (2026-11-22)
+
+- Added `kernel/bootinfo.{h,c}` normalized MB1/MB2 boot-info parser (mmap, framebuffer, mem).
+- Boot path: `boot32.S` MB2+MB1 headers, passes magic+info; `kernel_main(uint64_t boot_info, uint64_t boot_magic)`.
+- `gfx_init(const struct bootinfo*)`: selects `boot_fb` (MB1/MB2 RGB32/BGR32 framebuffer) then falls back to `bochs_dispi`.
+- PMM hardened for overlaps, holes, reserved/ACPI/NVS, >4GiB, unsorted maps via normalized bootinfo.
+- M3.5: on-screen early debug log (after gfx init) + panic screen with registers/stack trace; debug log suspended after GUI init/panic.
+- `tools/make_usb_image.py` builds GRUB multiboot2 ISO/USB image; flashing docs included.
+- Tests: `tests/test_bootinfo.c` (31 checks) wired into `tests/run_tests.bat` (14/14). `tests/boot_test_mb2.{py,bat}` added.
+- Real-hardware execution deferred in this env; checklist recorded in `tasks/hardware-log.md`.

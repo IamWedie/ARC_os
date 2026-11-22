@@ -1,6 +1,6 @@
 #include "gfx.h"
 #include "kernel.h"
-#include "mboot.h"
+#include "bootinfo.h"
 #include "font_inter.h"
 
 #define DISPI_IOPORT_INDEX 0x1CE
@@ -30,6 +30,71 @@ static int g_dirty_n;
 static int g_dirty_full;
 static uint32_t* g_front; /* mapped LFB */
 static volatile uint16_t* g_dispi_mmio; /* BAR2+0x500 when using bochs-display MMIO */
+static int g_fb_bgr; /* firmware framebuffer uses BGRx byte order */
+
+#define GFX_LOG_LINES 12
+#define GFX_LOG_COLS 96
+static char g_log[GFX_LOG_LINES][GFX_LOG_COLS];
+static int g_log_line;
+static int g_log_col;
+static int g_log_dirty;
+static int g_log_suspended;
+
+void gfx_debug_suspend(void) { g_log_suspended = 1; }
+
+static void gfx_debug_render(void) {
+    const struct gfx_font* f = gfx_font_get(12);
+    int lh = f ? (int)f->line_height : 14;
+    int pad = 4;
+    int w = 720;
+    int h = pad * 2 + GFX_LOG_LINES * lh;
+    if (w > (int)g_fb.width) w = (int)g_fb.width;
+    if (h > (int)g_fb.height) h = (int)g_fb.height;
+    gfx_fill_rect_alpha(0, 0, w, h, gfx_rgba(0, 0, 0, 140));
+    for (int i = 0; i < GFX_LOG_LINES; i++) {
+        int idx = (g_log_line + 1 + i) % GFX_LOG_LINES;
+        if (g_log[idx][0] == '\0') continue;
+        if (f) gfx_draw_text(f, pad, pad + i * lh, g_log[idx], gfx_rgba(220, 255, 220, 255));
+    }
+    g_log_dirty = 0;
+}
+
+void gfx_debug_redraw(void) {
+    if (!g_gfx_ready) return;
+    gfx_debug_render();
+    struct gfx_rect r = {0, 0, 720, 4 * 2 + 12 * 14};
+    if (r.w > (int)g_fb.width) r.w = (int)g_fb.width;
+    if (r.h > (int)g_fb.height) r.h = (int)g_fb.height;
+    gfx_present(&r);
+}
+
+void gfx_debug_log(const char* s) {
+    if (!s || g_log_suspended) return;
+    while (*s) {
+        char c = *s++;
+        if (c == '\r') continue;
+        if (c == '\n') {
+            g_log_line = (g_log_line + 1) % GFX_LOG_LINES;
+            g_log_col = 0;
+            g_log[g_log_line][0] = '\0';
+            g_log_dirty = 1;
+            continue;
+        }
+        if (c < 32 || c > 126) c = '?';
+        if (g_log_col < GFX_LOG_COLS - 1) {
+            g_log[g_log_line][g_log_col++] = c;
+            g_log[g_log_line][g_log_col] = '\0';
+            g_log_dirty = 1;
+        }
+    }
+    if (g_gfx_ready && g_log_dirty) {
+        gfx_debug_render();
+        struct gfx_rect r = {0, 0, 720, 4 * 2 + GFX_LOG_LINES * 14};
+        if (r.w > (int)g_fb.width) r.w = (int)g_fb.width;
+        if (r.h > (int)g_fb.height) r.h = (int)g_fb.height;
+        gfx_present(&r);
+    }
+}
 
 static inline uint16_t inw_port(uint16_t port) {
     uint16_t v;
@@ -235,6 +300,10 @@ void gfx_fill_rect_alpha(int x, int y, int w, int h, uint32_t argb_premul) {
     gfx_mark_dirty(x, y, x2 - x, y2 - y);
 }
 
+static inline uint32_t gfx_swizzle_bgr(uint32_t p) {
+    return (p & 0xFF00FF00u) | ((p & 0x00FF0000u) >> 16) | ((p & 0x000000FFu) << 16);
+}
+
 void gfx_present(const struct gfx_rect* rect) {
     if (!g_gfx_ready || !g_front) return;
     int x = 0, y = 0, w = (int)g_fb.width, h = (int)g_fb.height;
@@ -245,8 +314,12 @@ void gfx_present(const struct gfx_rect* rect) {
     y = clampi(y, 0, (int)g_fb.height);
     for (int row = y; row < y2; row++) {
         uint32_t* src = g_fb.pixels + (uint32_t)row * g_fb.width + (uint32_t)x;
-        volatile uint32_t* dst = g_front + (uint32_t)row * g_fb.width + (uint32_t)x;
-        for (int col = x; col < x2; col++) *dst++ = *src++;
+        volatile uint32_t* dst = g_front + (uint32_t)row * (g_fb.pitch / 4u) + (uint32_t)x;
+        if (g_fb_bgr) {
+            for (int col = x; col < x2; col++) *dst++ = gfx_swizzle_bgr(*src++);
+        } else {
+            for (int col = x; col < x2; col++) *dst++ = *src++;
+        }
     }
 }
 
@@ -354,15 +427,71 @@ int gfx_draw_text(const struct gfx_font* font, int x, int y, const char* text, u
     return cx - x;
 }
 
-int gfx_init(void) {
-    if (g_gfx_ready) return 0;
+static int gfx_try_boot_fb(const struct bootinfo* bi) {
+    if (!bi || !(bi->flags & BOOTINFO_FLAG_FB)) return -1;
+    const struct bootinfo_framebuffer* fb = &bi->fb;
+    if (fb->type != 1 || fb->bpp != 32) {
+        terminal_putstring("GFX: boot fb unsupported format\n");
+        return -1;
+    }
+    if (!fb->addr || !fb->width || !fb->height || !fb->pitch) return -1;
+    /* Common layouts: RGBx (R@16,G@8,B@0) or BGRx (R@0,G@8,B@16). */
+    int bgr = 0;
+    if (fb->red_pos == 16 && fb->green_pos == 8 && fb->blue_pos == 0) bgr = 0;
+    else if (fb->red_pos == 0 && fb->green_pos == 8 && fb->blue_pos == 16) bgr = 1;
+    else {
+        terminal_putstring("GFX: boot fb unsupported color layout\n");
+        return -1;
+    }
+
+    uint64_t lfb_pa = fb->addr;
+    uint32_t mw = fb->width;
+    uint32_t mh = fb->height;
+    uint32_t pitch = fb->pitch;
+    uint64_t fb_bytes = (uint64_t)pitch * mh;
+    uint64_t fb_pages = (fb_bytes + 4095u) / 4096u;
+    uint64_t back_bytes = (uint64_t)mw * mh * 4u;
+    uint64_t back_pages = (back_bytes + 4095u) / 4096u;
+
+    pmm_reserve_range(lfb_pa, fb_pages * 4096u);
+    for (uint64_t off = 0; off < fb_pages * 4096u; off += 4096u)
+        vmm_map_page(lfb_pa + off, lfb_pa + off, 0);
+
+    uint32_t* back = (uint32_t*)pmm_alloc_pages((size_t)back_pages);
+    if (!back) {
+        terminal_putstring("GFX: boot fb back buffer alloc failed\n");
+        return -1;
+    }
+    for (uint64_t i = 0; i < back_pages * 1024u; i++) back[i] = 0;
+
+    g_fb.width = mw;
+    g_fb.height = mh;
+    g_fb.pitch = pitch;
+    g_fb.bpp = 32;
+    g_fb.pixels = back;
+    g_front = (uint32_t*)(uintptr_t)lfb_pa;
+    g_fb_bgr = bgr;
+    g_dirty_n = 0;
+    g_dirty_full = 0;
+    g_gfx_ready = 1;
+
+    terminal_putstring("GFX: bootfb ");
+    terminal_print_int(mw);
+    terminal_putstring("x");
+    terminal_print_int(mh);
+    terminal_putstring("x32 LFB=");
+    terminal_print_hex(lfb_pa);
+    if (bgr) terminal_putstring(" BGR");
+    terminal_putstring("\n");
+    return 0;
+}
+
+static int gfx_try_bochs_dispi(void) {
     uint64_t lfb_pa = 0, mmio_pa = 0;
     find_bochs_display(&lfb_pa, &mmio_pa);
 
     uint16_t id = dispi_read(VBE_DISPI_INDEX_ID);
     if (id < 0xB0C0 || id > 0xB0C6) {
-        /* Legacy I/O ports not responding (e.g. -device bochs-display).
-         * Try MMIO BAR2: dispi regs at offset 0x500, 16-bit indexed. */
         if (mmio_pa) {
             for (uint64_t off = 0; off < 0x1000; off += 4096)
                 vmm_map_page(mmio_pa + off, mmio_pa + off, 0);
@@ -403,18 +532,15 @@ int gfx_init(void) {
 
     uint64_t fb_bytes = (uint64_t)mw * mh * 4u;
     uint64_t fb_pages = (fb_bytes + 4095u) / 4096u;
-    /* Reserve LFB range so PMM never hands it out. */
     pmm_reserve_range(lfb_pa, fb_pages * 4096u);
     for (uint64_t off = 0; off < fb_pages * 4096u; off += 4096u)
         vmm_map_page(lfb_pa + off, lfb_pa + off, 0);
 
-    /* Back buffer in system RAM. */
     uint32_t* back = (uint32_t*)pmm_alloc_pages((size_t)fb_pages);
     if (!back) {
         terminal_putstring("GFX: back buffer alloc failed\n");
         return -1;
     }
-    /* pmm_alloc_pages returns physical identity-mapped address. */
     for (uint64_t i = 0; i < fb_pages * 1024u; i++) back[i] = 0;
 
     g_fb.width = mw;
@@ -423,11 +549,12 @@ int gfx_init(void) {
     g_fb.bpp = 32;
     g_fb.pixels = back;
     g_front = (uint32_t*)(uintptr_t)lfb_pa;
+    g_fb_bgr = 0;
     g_dirty_n = 0;
     g_dirty_full = 0;
     g_gfx_ready = 1;
 
-    terminal_putstring("GFX: ");
+    terminal_putstring("GFX: bochs_dispi ");
     terminal_print_int(mw);
     terminal_putstring("x");
     terminal_print_int(mh);
@@ -435,4 +562,10 @@ int gfx_init(void) {
     terminal_print_hex(lfb_pa);
     terminal_putstring("\n");
     return 0;
+}
+
+int gfx_init(const struct bootinfo* bi) {
+    if (g_gfx_ready) return 0;
+    if (gfx_try_boot_fb(bi) == 0) return 0;
+    return gfx_try_bochs_dispi();
 }

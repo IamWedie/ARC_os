@@ -42,6 +42,8 @@ void terminal_print_int(uint64_t n);
 void terminal_print_hex(uint64_t n);
 
 /* Physical memory manager (pmm.c) */
+struct bootinfo;
+
 struct pmm_region {
     uint64_t base;
     uint64_t len;
@@ -49,7 +51,7 @@ struct pmm_region {
     uint32_t pad;
 };
 
-void pmm_init(uint64_t multiboot_addr);
+void pmm_init(const struct bootinfo* bi);
 void* pmm_alloc_pages(size_t count);
 void pmm_free_pages(void* addr, size_t count);
 void pmm_reserve_range(uint64_t base, uint64_t len);
@@ -522,7 +524,7 @@ extern const uint8_t _binary_user_hello_bin_size[];
 #define SYS_EXEC  16
 
 /* Kernel entry */
-void kernel_main(uint64_t multiboot_addr);
+void kernel_main(uint64_t boot_info, uint64_t boot_magic);
 
 /* Symbols provided by linker/kernel64.ld. */
 extern uint8_t __kernel_start[];

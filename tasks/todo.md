@@ -28,3 +28,17 @@
 - [x] QEMU gate: tests/boot_test_gui.py desktop screendump assertions
 - [x] M2 interaction gate: mouse move/click/window appear/drag/close/dock hover
 - [x] All M2 gates green, commit, review, merge/tag
+
+## Current: M3 — Real-hardware boot path
+
+- [x] Step 1: MB2 spike in QEMU (framebuffer tag type 8) - QEMU 11.x `-kernel` still boots MB1 with dual headers; MB2-only ELF rejected with PVH note. MB2 header present/valid; GRUB/real-hardware path is target.
+- [x] Step 2: Add Multiboot2 header + boot-info parser; keep Multiboot1 path working
+- [x] Step 3: display backend selection (`boot_fb` from MB1/MB2 framebuffer, `bochs_dispi` fallback); compositor uses gfx_* interface only
+- [x] Step 4: `tools/make_usb_image.py` builds bootable GRUB+kernel USB/ISO image; Rufus/dd flashing documented
+- [x] Step 5: On-screen early debug log region + panic screen (registers, stack trace) without serial
+- [x] Step 6: Harden PMM/memory-map parsing for real firmware maps (holes, reserved, ACPI/NVS, >4GiB, overlaps, unsorted)
+- [x] Step 7: Real-hardware checklist/log in `tasks/hardware-log.md` (execution deferred: no physical hardware in env)
+- [x] Host tests: MB2 parser/memory-map normalization hardening (`tests/test_bootinfo.c`, 31 checks)
+- [x] QEMU gate: `tests/boot_test_mb2.bat` (MB2 header + normalized boot path)
+- [x] Existing gates green: run_tests, build --quiet NO-SSE, run_all, boot_test_gui/fork/exec/mb2
+- [x] M3 commit(s) and milestone closeout

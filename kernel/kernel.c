@@ -1,4 +1,5 @@
 #include "kernel.h"
+#include "bootinfo.h"
 #include "gfx.h"
 #include "mouse.h"
 #include "gui.h"
@@ -9,7 +10,9 @@ extern void interrupts_init(void);
 extern void scheduler_init(void);
 extern void fs_init(void);
 
-void kernel_main(uint64_t multiboot_addr) {
+void kernel_main(uint64_t boot_info_addr, uint64_t boot_magic) {
+    struct bootinfo bi;
+
     terminal_initialize();
     serial_init();
 
@@ -17,12 +20,18 @@ void kernel_main(uint64_t multiboot_addr) {
     terminal_putstring("Full OS from scratch\n");
     terminal_putstring("Booting...\n");
 
+    bootinfo_parse(&bi, boot_magic, boot_info_addr);
+    if (bi.magic == BOOT_MAGIC_MB2)
+        terminal_putstring("BOOT: Multiboot2\n");
+    else
+        terminal_putstring("BOOT: Multiboot1\n");
+
     /* Physical + virtual memory first: everything depends on real RAM. */
-    pmm_init(multiboot_addr);
+    pmm_init(&bi);
     vmm_init();
     kmem_init_early();
 
-    if (gfx_init() == 0) {
+    if (gfx_init(&bi) == 0) {
         uint32_t t0_lo, t0_hi, t1_lo, t1_hi;
         __asm__ volatile("rdtsc" : "=a"(t0_lo), "=d"(t0_hi));
         gfx_clear(gfx_rgba(20, 40, 90, 255));
@@ -64,6 +73,7 @@ void kernel_main(uint64_t multiboot_addr) {
 
     if (gfx_ready()) {
         gui_start(gfx_fb_get());
+        gfx_debug_suspend();
         terminal_putstring("GUI: desktop initialized\n");
     }
 

@@ -1,4 +1,5 @@
 #include "kernel.h"
+#include "gfx.h"
 
 /*
  * CPU exception handling (utility vectors 0..31). Each IDT gate jumps to an
@@ -106,6 +107,130 @@ static void dump_stack(const exc_frame_t* f) {
     }
 }
 
+static void fmt_hex64(char* out, uint64_t v) {
+    static const char hex[] = "0123456789abcdef";
+    out[0] = '0'; out[1] = 'x';
+    for (int i = 15; i >= 0; i--) {
+        out[2 + (15 - i)] = hex[(v >> (i * 4)) & 0xF];
+    }
+    out[18] = '\0';
+}
+
+static void fmt_dec(char* out, uint64_t n) {
+    char tmp[24];
+    int i = 0;
+    if (n == 0) { out[0] = '0'; out[1] = '\0'; return; }
+    while (n > 0 && i < 23) { tmp[i++] = '0' + (n % 10); n /= 10; }
+    int j = 0;
+    while (i > 0) out[j++] = tmp[--i];
+    out[j] = '\0';
+}
+
+static void panic_puts_gfx(int* y, int x, const char* s, uint32_t color) {
+    const struct gfx_font* f = gfx_font_get(14);
+    if (!f || !s) return;
+    int lh = (int)f->line_height;
+    struct gfx_fb* fb = gfx_fb_get();
+    if (fb && *y + lh > (int)fb->height) return;
+    gfx_draw_text(f, x, *y, s, color);
+    *y += lh;
+}
+
+static void panic_kv_gfx(int* y, int x, const char* k, uint64_t v, uint32_t color) {
+    char line[128];
+    char hv[20];
+    int i = 0;
+    fmt_hex64(hv, v);
+    while (k[i] && i < 40) { line[i] = k[i]; i++; }
+    line[i++] = '=';
+    for (int j = 0; hv[j] && i < 127; j++, i++) line[i] = hv[j];
+    line[i] = '\0';
+    panic_puts_gfx(y, x, line, color);
+}
+
+static void gfx_panic_screen(exc_frame_t* f) {
+    if (!gfx_ready()) return;
+    struct gfx_fb* fb = gfx_fb_get();
+    if (!fb) return;
+    gfx_clear(gfx_rgba(60, 0, 0, 255));
+    uint32_t white = gfx_rgba(255, 255, 255, 255);
+    uint32_t yellow = gfx_rgba(255, 230, 120, 255);
+    uint32_t gray = gfx_rgba(220, 220, 220, 255);
+    int y = 20;
+    panic_puts_gfx(&y, 20, "=== ARC OS KERNEL PANIC ===", white);
+    y += 4;
+
+    uint32_t v = (uint32_t)(f->vec & 0xFF);
+    char hdr[160];
+    char num[24];
+    int p = 0;
+    const char* name = exc_names[v < 32 ? v : 0];
+    const char* pre = "Exception: ";
+    while (*pre && p < 150) hdr[p++] = *pre++;
+    while (*name && p < 150) hdr[p++] = *name++;
+    const char* mid = "  vector=";
+    while (*mid && p < 150) hdr[p++] = *mid++;
+    fmt_dec(num, v); for (int i = 0; num[i] && p < 150; i++) hdr[p++] = num[i];
+    const char* mid2 = "  err=";
+    while (*mid2 && p < 150) hdr[p++] = *mid2++;
+    fmt_hex64(num, f->err); /* reuse buf, but fmt_hex64 writes 19 chars */ 
+    { char hv[20]; fmt_hex64(hv, f->err); for (int i = 0; hv[i] && p < 159; i++) hdr[p++] = hv[i]; }
+    hdr[p] = '\0';
+    panic_puts_gfx(&y, 20, hdr, yellow);
+
+    int user = (f->cs & 0x3) == 0x3;
+    panic_puts_gfx(&y, 20, user ? "Mode: user" : "Mode: kernel", gray);
+    panic_kv_gfx(&y, 20, "rip", f->rip, gray);
+    panic_kv_gfx(&y, 20, "cs", f->cs, gray);
+    panic_kv_gfx(&y, 20, "rflags", f->rflags, gray);
+    if (user) { panic_kv_gfx(&y, 20, "rsp", f->rsp, gray); panic_kv_gfx(&y, 20, "ss", f->ss, gray); }
+    else { panic_kv_gfx(&y, 20, "trap_frame", (uint64_t)f, gray); }
+    if (v == 14) {
+        uint64_t cr2 = 0;
+        __asm__ volatile("mov %%cr2, %0" : "=r"(cr2));
+        panic_kv_gfx(&y, 20, "cr2", cr2, yellow);
+    }
+
+    y += 4;
+    panic_puts_gfx(&y, 20, "Registers:", white);
+    const uint64_t r[15] = {f->r15,f->r14,f->r13,f->r12,f->rbp,f->rbx,f->r11,f->r10,f->r9,f->r8,f->rdi,f->rsi,f->rdx,f->rcx,f->rax};
+    static const char* rn[15] = {"r15","r14","r13","r12","rbp","rbx","r11","r10","r9","r8","rdi","rsi","rdx","rcx","rax"};
+    for (int i = 0; i < 15; i += 2) {
+        char line[128]; char h1[20], h2[20]; int lp = 0;
+        fmt_hex64(h1, r[i]); fmt_hex64(h2, r[i+1 < 15 ? i+1 : i]);
+        const char* a = rn[i]; while (*a && lp < 120) line[lp++] = *a++;
+        line[lp++] = '='; for (int j=0; h1[j] && lp<120; j++) line[lp++]=h1[j];
+        if (i+1 < 15) {
+            const char* sp = "  "; while(*sp && lp<120) line[lp++]=*sp++;
+            const char* b = rn[i+1]; while (*b && lp<120) line[lp++]=*b++;
+            line[lp++]='='; for (int j=0; h2[j] && lp<120; j++) line[lp++]=h2[j];
+        }
+        line[lp]='\0';
+        panic_puts_gfx(&y, 20, line, gray);
+    }
+
+    y += 4;
+    panic_puts_gfx(&y, 20, "Backtrace:", white);
+    uint64_t rbp = f->rbp;
+    for (int i = 0; i < 12 && rbp; i++) {
+        if (rbp < 0x100000 || rbp >= 0x20000000) break;
+        uint64_t ret = *(uint64_t*)(rbp + 8);
+        uint64_t next = *(uint64_t*)rbp;
+        if (ret < (uint64_t)__kernel_start || ret >= (uint64_t)__kernel_end) break;
+        char line[128], hv[20], dn[24]; int lp = 0;
+        const char* hash = "#"; while(*hash) line[lp++]=*hash++;
+        fmt_dec(dn, (uint64_t)i); for(int j=0; dn[j]&&lp<120;j++) line[lp++]=dn[j];
+        line[lp++]=' '; line[lp++]=' ';
+        fmt_hex64(hv, ret); for(int j=0; hv[j]&&lp<127;j++) line[lp++]=hv[j];
+        line[lp]='\0';
+        panic_puts_gfx(&y, 20, line, gray);
+        if (next <= rbp) break;
+        rbp = next;
+    }
+    panic_puts_gfx(&y, 20, "System halted. Serial/VGA log may have more details.", yellow);
+    gfx_present(NULL);
+}
+
 void exception_handler(void* fptr) {
     exc_frame_t* f = (exc_frame_t*)fptr;
 
@@ -114,6 +239,9 @@ void exception_handler(void* fptr) {
         for (;;) __asm__ volatile("cli; hlt");
     }
     exc_active = 1;
+    gfx_debug_suspend();
+
+    gfx_panic_screen(f);
 
     terminal_setcolor(COLOR_WHITE | (COLOR_RED << 4));
     terminal_putstring("\n=== KERNEL EXCEPTION ===\n");

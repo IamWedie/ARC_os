@@ -10,9 +10,38 @@
 .set MB_FLAGS, 0x00000003
 .set MB_CHECKSUM, -(MB_MAGIC + MB_FLAGS)
 
+.set MB2_MAGIC, 0xE85250D6
+.set MB2_ARCH,  0
+.set MB2_HDRLEN, (mb2_header_end - mb2_header_start)
+.set MB2_CHECKSUM, -(MB2_MAGIC + MB2_ARCH + MB2_HDRLEN)
+
 .set KERNEL_LOAD, 0x200000      /* load address of embedded 64-bit kernel */
 
 .section .multiboot
+    /* Multiboot2 header first for QEMU -kernel MB2 detection. */
+    .balign 8
+mb2_header_start:
+    .long MB2_MAGIC
+    .long MB2_ARCH
+    .long MB2_HDRLEN
+    .long MB2_CHECKSUM
+    /* Framebuffer request tag (type 5): prefer 32bpp, no size preference. */
+    .balign 8
+    .short 5
+    .short 0
+    .long 20
+    .long 0
+    .long 0
+    .long 32
+    /* End tag. */
+    .balign 8
+    .short 0
+    .short 0
+    .long 8
+mb2_header_end:
+
+    /* Multiboot1 header (kept for existing QEMU -kernel gates). */
+    .balign 4
     .long MB_MAGIC
     .long MB_FLAGS
     .long MB_CHECKSUM
@@ -31,8 +60,9 @@ _start:
     /* Multiboot does not guarantee a usable stack for the OS image. */
     movl $stack_top, %esp
 
-    /* Save multiboot info pointer (ebx) into edi; we pass it to the
-     * kernel as the first argument once in long mode. */
+    /* Save boot magic (eax) and info pointer (ebx). We pass them to the
+     * kernel as (info, magic) in RDI, RSI once in long mode. */
+    movl %eax, %ebp
     movl %ebx, %edi
 
     call com1_init
@@ -72,7 +102,8 @@ _start:
     call com1_puts
 
     /* Jump to the embedded 64-bit kernel (now in long mode).
-     * RDI = multiboot info addr. */
+     * RDI = boot info addr, RSI = boot magic. */
+    movl %ebp, %esi
     ljmp $0x08, $KERNEL_LOAD
 
 /* ---- serial COM1 debug helpers (32-bit) ---- */

@@ -4,6 +4,8 @@
 #include <stdint.h>
 #include <stddef.h>
 
+struct bootinfo;
+
 struct gfx_fb {
     uint32_t width;
     uint32_t height;
@@ -16,7 +18,7 @@ struct gfx_rect {
     int x, y, w, h;
 };
 
-int gfx_init(void);
+int gfx_init(const struct bootinfo* bi);
 struct gfx_fb* gfx_fb_get(void);
 int gfx_ready(void);
 
@@ -60,6 +62,11 @@ const struct gfx_font* gfx_font_get(uint8_t size);
 int gfx_draw_char(const struct gfx_font* font, int x, int y, char c, uint32_t argb);
 int gfx_draw_text(const struct gfx_font* font, int x, int y, const char* text, uint32_t argb);
 int gfx_text_width(const struct gfx_font* font, const char* text);
+
+/* M3: early on-screen debug log (after gfx init) */
+void gfx_debug_log(const char* s);
+void gfx_debug_redraw(void);
+void gfx_debug_suspend(void);
 
 /* Host-test helpers */
 void gfx_test_set_fb(uint32_t* pixels, uint32_t w, uint32_t h);

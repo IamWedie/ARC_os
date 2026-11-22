@@ -1,4 +1,5 @@
 #include "kernel.h"
+#include "gfx.h"
 
 uint8_t terminal_color = COLOR_LIGHT_GREY | (COLOR_BLUE << 4);
 size_t terminal_row = 0;
@@ -47,6 +48,7 @@ void terminal_putchar(char c, uint8_t color) {
 }
 
 void terminal_putstring(const char* str) {
+    gfx_debug_log(str);
     while (*str) terminal_putchar(*str++, terminal_color);
 }
 
