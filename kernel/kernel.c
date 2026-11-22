@@ -1,4 +1,7 @@
 #include "kernel.h"
+#include "gfx.h"
+#include "mouse.h"
+#include "gui.h"
 
 extern void gdt_init(void);
 extern void idt_init(void);
@@ -19,6 +22,20 @@ void kernel_main(uint64_t multiboot_addr) {
     vmm_init();
     kmem_init_early();
 
+    if (gfx_init() == 0) {
+        uint32_t t0_lo, t0_hi, t1_lo, t1_hi;
+        __asm__ volatile("rdtsc" : "=a"(t0_lo), "=d"(t0_hi));
+        gfx_clear(gfx_rgba(20, 40, 90, 255));
+        gfx_present(NULL);
+        __asm__ volatile("rdtsc" : "=a"(t1_lo), "=d"(t1_hi));
+        gfx_dirty_reset();
+        uint64_t t0 = ((uint64_t)t0_hi << 32) | t0_lo;
+        uint64_t t1 = ((uint64_t)t1_hi << 32) | t1_lo;
+        terminal_putstring("GFX: frame redraw cycles=");
+        terminal_print_int(t1 - t0);
+        terminal_putstring("\n");
+    }
+
     acpi_init();
 
     terminal_putstring("Physical memory: ");
@@ -35,6 +52,7 @@ void kernel_main(uint64_t multiboot_addr) {
     lapic_timer_start();
     /* Route device IRQs through the IOAPIC (masks the PIC + ExtINT). */
     ioapic_init();
+    mouse_init();
     /* The PIT now drives IRQ0 as a background clock; the LAPIC is the tick. */
     pit_init();
     /* Mask PIT IRQ0 in the PIC (no-op once the IOAPIC disabled the PIC). */
@@ -43,7 +61,12 @@ void kernel_main(uint64_t multiboot_addr) {
     ata_init();
     fs_init();
     exec_install_programs();
-    
+
+    if (gfx_ready()) {
+        gui_start(gfx_fb_get());
+        terminal_putstring("GUI: desktop initialized\n");
+    }
+
     /* Print system info */
     terminal_putstring("Kernel loaded at ");
     terminal_print_hex(0x100000);
@@ -72,6 +95,10 @@ void kernel_main(uint64_t multiboot_addr) {
 
     /* Process 0 (kernel) becomes the idle loop and resource reaper. */
     while (1) {
+        if (gfx_frame_pending()) {
+            gfx_frame_ack();
+            gui_frame_tick();
+        }
         scheduler_reap_zombies();
         __asm__ volatile("hlt");
     }

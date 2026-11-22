@@ -26,6 +26,7 @@
 #define IRQ_VEC_PIT    32
 #define IRQ_VEC_KBD    33
 #define IRQ_VEC_COM1   36
+#define IRQ_VEC_MOUSE  44
 #define IRQ_VEC_ATA    46
 
 static volatile uint32_t* ioapic = 0;
@@ -94,6 +95,7 @@ void ioapic_init(void) {
         ioapic_route((uint32_t)g, IRQ_VEC_COM1, flags);
     }
 
+    ioapic_route_isa(12, IRQ_VEC_MOUSE, 1);
     ioapic_route_isa(15, 0,          0);
 
     /* ATA primary channel. QEMU's MADT has no override for IRQ14, so the

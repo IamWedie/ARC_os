@@ -153,6 +153,10 @@ void pmm_free_pages(void* addr, size_t count) {
     }
 }
 
+void pmm_reserve_range(uint64_t base, uint64_t len) {
+    pmm_reserve(base, len);
+}
+
 uint64_t pmm_total_mem(void) { return pmm_total_frames << 12; }
 uint64_t pmm_free_mem(void)   { return pmm_free_frames << 12; }
 uint32_t pmm_region_count_get(void) { return pmm_region_count; }

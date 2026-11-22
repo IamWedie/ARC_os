@@ -21,4 +21,4 @@ if errorlevel 1 (
 )
 
 echo Starting QEMU... (Ctrl+A X to quit)
-"%QEMU%" -kernel os.elf -nographic -m 512M
+"%QEMU%" -kernel os.elf -nographic -m 512M -vga none -device bochs-display,vgamem=67108864

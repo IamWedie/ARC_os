@@ -1,93 +1,30 @@
-## Task List
+# TODO
 
-### Phase 1: Remove MSYS2 Dependency ✅
+## Current: M1 — 1080p framebuffer, font, double buffering
 
-- [x] Task 1: Update build.bat to use native Windows GCC ✅
-- [x] Task 2: Update build.py to use native Windows GCC ✅
-- [x] Task 3: Update rebuild.bat to use native Windows GCC ✅
-- [x] Checkpoint 1: MSYS2 Dependency Removed ✅
+- [x] M1 design note + DISPI/MMIO spike confirmation (ADR-007, risk-log)
+- [x] Step 1: gfx_init max-res detect/readback, 1920x1080x32 request, fallbacks
+- [x] Step 2: QEMU args `-vga none -device bochs-display,vgamem=67108864` (MMIO BAR2 fallback)
+- [x] Step 3: RAM back buffer from PMM
+- [x] Step 4: gfx_present dirty-rect copy + merge (host-testable)
+- [x] Step 5: OFL Inter pre-rasterized font (12/14/18/24), coverage alpha blend
+- [x] Step 6: premultiplied-alpha blend/fill primitives (scalar)
+- [x] Step 7: 60 Hz LAPIC frame pacer, skip clean frames
+- [x] Host tests: tests/test_gfx.c suite 12
+- [x] QEMU gate: tests/boot_test_gui.py screendump pixel assertions
+- [x] All gates green, commit, review, merge/tag
 
-### Phase 2: Memory & Scheduler (Year 1) — COMPLETE (UP-only)
+## Current: M2 — Mouse, compositor, windows, dock, menu bar (kernel-mode)
 
-#### Memory (host-verified)
-- [x] Task 4: Size-classed slab allocator (12 classes, 16 B – 32 KiB) — `kernel/slab.h`, `kernel/slab.c`
-- [x] Task 5: kmalloc/kfree route through slab; > 32 KiB use a PMM page run — `kernel/memory.c`
-- [x] Task 6: PMM integration; added missing `struct pmm_region` + PMM/VMM declarations
-- [x] Task 6b: Host stress test links the REAL `slab.c` + `memory.c` with a PMM stub — 2269 checks pass
-- [x] Task 6c: Double-free detection via per-slab allocation bitmap (mutation test proved it is exercised)
-- [x] Task 6d: `tests\run_tests.bat` reproduces build + run
-- [x] Task 6e: Wire kernel C sources into the real build/link
-      `build.bat`/`build.py`/`rebuild.bat` now invoke `tools/build_kernel.py`;
-      all `kernel/*.c` + `lib/*.c` compile, link, and embed into `os.elf`.
-      Build validates the multiboot header and the embedded kernel bytes.
-- [x] Task 6f: Runtime validation in QEMU — `os.elf` reaches `arc> ` in ring 3;
-      full serial boot log captured by `tools\boot_test.py`.
-
-#### Scheduler
-- [x] Task 7: Process state machine — `PROC_FREE`, `PROC_READY`, `PROC_RUNNING`,
-      `PROC_IDLE`, `PROC_BLOCKED`, `PROC_ZOMBIE` in `kernel/kernel.h`;
-      transitions enforced by `kernel/scheduler.c`.
-- [x] Task 8: O(1) MLFQ run queue — 4 levels, FIFO ring queues, 10-tick
-      quantum with demotion, 100-tick priority boost.
-- [x] Task 9: Preemption point in `irq0_handler` (every 10 PIT ticks); `irq0_stub` RSP contract verified in `isr.S`
-- [x] Task 10: `scheduler_yield()` via software interrupt vector `0x81`;
-      `scheduler_get_stats()` now reports real counters; block/wake/kill/reap API.
-- [x] Task 10b: Runtime verification of context switches — the timer preempts
-      the idle loop into the ring-3 shell, which prints `arc> ` via `int 0x80`.
-      The serial-driven runtime test runs `help`, `clear`, `touch runtime.txt`,
-      `ls`, and `exit`; `exit` prints `[Process exited]` and returns to idle.
-
-- [x] Checkpoint 2: Memory + Scheduler verified
-      Memory: 2269 host checks, 0 failures.
-      Scheduler: 251 host checks, 0 failures (states, FIFO fairness, demotion,
-      boost, block/wake, kill/reap, idle fallback, invariants).
-      Runtime: full quality gate passes — host tests, build, and an interactive
-      QEMU shell session.
-      Follow-up closed in Phase 3: user code/stack frames are now owned by the
-      process and freed on reap (see below).
-
-### Phase 3: POSIX Layer & Filesystem (Year 2)
-- [x] Process resource ownership: track and free user code/stack frames on reap
-      `process_t.owned[]` holds up to 4 physical frame runs;
-      `process_alloc_owned_frames()` attaches atomically; `scheduler_reap()`
-      frees them. `kernel/user.c` uses the API and brackets process setup with
-      preemption disabled so a timer tick cannot schedule a half-mapped process.
-      Host: 318 scheduler checks (up from 251), 0 failures; full gate green.
-- [x] Automatic zombie reaping (idle reaper) ✅
-  - Acceptance: `scheduler_reap_zombies()` reaps every zombie except the current
-    process; process 0's idle loop calls it; an exited process's kernel stack and
-    owned user frames return to the PMM without an explicit per-pid reap.
-  - Verify: RED test failed before the API existed; GREEN host run 343 checks,
-    0 failures; full gate green including `exit` and `BOOT OK`.
-  - Files: `kernel/kernel.h`, `kernel/scheduler.c`, `kernel/kernel.c`,
-    `tests/test_scheduler.c`, `docs/specs/automatic-zombie-reaping.md`.
-- [x] Per-process POSIX descriptor layer ✅
-  - Spec: `docs/specs/posix-fd-layer-design.md` (status: implemented).
-  - Per-process fd tables (0/1/2 std), shared open file descriptions, `dup`,
-    deferred unlink, access-mode/seek checks; `SYS_DUP 13`, `SYS_OPEN` flags,
-    `SYS_SEEK` whence; `FS_DISK_VERSION 2` (older images reformatted).
-  - Refcount contract: `fs_open_slot()` takes no ref; `fd_open()` adds one slot
-    ref per OFD; dup/clone bump only OFD refs; release at OFD refs 0.
-  - **Behaviour change:** `echo text to file` now overwrites (truncates) instead
-    of appending (`O_WRONLY | O_CREAT | O_TRUNC`).
-  - Verify: fd 164 + fs-slot 37 host checks; full gate green with
-    `--expect-not alphabeta` and `--expect-not betaa`; QEMU `cat fdtest.txt` →
-    `beta`; `BOOT OK: 1675 bytes`; NO-SSE OK.
-  - Files: `kernel/fd.c`, `kernel/fs.c`, `kernel/syscall.c`, `userspace/shell.c`,
-    `tests/test_fd.c`, `tests/test_fs_slot.c`, `tests/run_all.bat`.
-- [ ] FAT32 driver with cache integration
-- [ ] fork/exec/wait implementation
-- [ ] /proc filesystem for process introspection
-- [ ] libc-like API (string, stdio) — minimal string/memory + malloc/free exist;
-      stdio and the wider POSIX surface are still missing
-
-### Phase 4: GUI & Usability (Year 2-3)
-- [ ] VESA framebuffer driver
-- [ ] PS/2 mouse driver
-- [ ] Windowing system (basic)
-- [ ] Shell with piping/redirection
-
-### Phase 5: Networking & Polish (Year 3)
-- [ ] NIC driver + TCP/IP light
-- [ ] USB host enumeration
-- [ ] Full POSIX compliance target
+- [x] Step 1: PS/2 mouse driver (IRQ12, 3-byte packets, clamp, accel) + host tests
+- [x] Step 2: compositor core (16 windows, Z-order, premul blend, damage, hit-test)
+- [x] Step 3: basic visual layer (rounded corners, title bar, traffic lights)
+- [x] Step 4: menu bar (translucent, 28 px, logo/app name/clock)
+- [x] Step 5: dock (centered pill, hover magnification, running indicator)
+- [x] Step 6: animations (ease-out/spring open/close/minimize)
+- [x] Step 7: built-in apps (About, Notes, Files, System Monitor)
+- [x] Step 8: keyboard routing (focused text field gets keys, else shell)
+- [x] Host tests: tests/test_gui.c suite 13 extended
+- [x] QEMU gate: tests/boot_test_gui.py desktop screendump assertions
+- [x] M2 interaction gate: mouse move/click/window appear/drag/close/dock hover
+- [x] All M2 gates green, commit, review, merge/tag

@@ -6,6 +6,7 @@
  */
 
 #include "kernel.h"
+#include "gfx.h"
 
 #define MSR_APIC_BASE  0x1B
 #define APIC_ENABLE    (1ULL << 11)
@@ -59,6 +60,7 @@ void lapic_mask_extint(void) {
 /* Preemption handler: LAPIC timer tick (vector 0x40). */
 uint64_t apic_timer_handler(uint64_t rsp) {
     lapic_eoi();
+    gfx_tick_100hz();
     return scheduler_switch(rsp);
 }
 

@@ -92,4 +92,24 @@ echo [11/11] Building and running exec-loader test against real kernel sources..
 if errorlevel 1 exit /b 1
 
 tests\test_exec.exe
+if errorlevel 1 exit /b 1
+
+echo [12/12] Building and running gfx test against real kernel sources...
+"%GCC%" -O2 -Wall -Wextra -std=gnu11 -I kernel ^
+    tests\test_gfx.c tests\gfx_stub.c ^
+    kernel\gfx.c ^
+    -o tests\test_gfx.exe
+if errorlevel 1 exit /b 1
+
+tests\test_gfx.exe
+if errorlevel 1 exit /b 1
+
+echo [13/13] Building and running gui test against real kernel sources...
+"%GCC%" -O2 -Wall -Wextra -std=gnu11 -I kernel ^
+    tests\test_gui.c tests\gui_stub.c ^
+    kernel\mouse.c kernel\compositor.c kernel\gui.c ^
+    -o tests\test_gui.exe
+if errorlevel 1 exit /b 1
+
+tests\test_gui.exe
 exit /b %errorlevel%
