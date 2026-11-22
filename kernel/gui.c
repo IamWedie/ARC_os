@@ -259,11 +259,14 @@ static void gui_remove_window(struct gui_state* g, uint32_t comp_id) {
     for(int i=0;i<g->win_count;i++) if(g->wins[i].comp_id==comp_id) { idx=i; break; }
     if(idx<0) return;
     struct comp_window* cw = comp_find(&g->comp, comp_id);
-    if (cw && cw->surface) {
-        /* surfaces allocated from pmm in kernel; for host tests we don't free here if null-managed */
-        /* pmm_free_pages(cw->surface, ...); handled by caller in kernel; simple: leak-safe in small M2 */
+    uint32_t* surf = 0;
+    size_t pages = 0;
+    if (cw && cw->surface && cw->w > 0 && cw->h > 0) {
+        surf = cw->surface;
+        pages = ((size_t)cw->w * (size_t)cw->h * 4u + 4095u) / 4096u;
     }
     comp_destroy_window(&g->comp, comp_id);
+    if (surf && pages) pmm_free_pages(surf, pages);
     for(int i=idx;i+1<g->win_count;i++) g->wins[i]=g->wins[i+1];
     g->win_count--;
     if(g->focused_id==comp_id) g->focused_id = g->win_count ? g->wins[g->win_count-1].comp_id : 0;
