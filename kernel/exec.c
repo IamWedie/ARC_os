@@ -63,7 +63,9 @@ uint64_t exec_build_user_stack(uint8_t* stack_base, size_t stack_bytes,
 int exec_load_image(int pid, const uint8_t* image, size_t size,
                     char* const argv[], int argc, uint64_t* user_rsp_out) {
     if (pid <= 0 || pid >= MAX_PROCESSES) return -1;
-    if (!image || size == 0 || size > (size_t)USER_FRAME_PAGES * 4096u) return -1;
+    /* Both global caps apply; FS_MAX_FILESIZE is the tighter one today. */
+    if (!image || size == 0 || size > (size_t)FS_MAX_FILESIZE ||
+        size > (size_t)USER_FRAME_PAGES * 4096u) return -1;
     if (!user_rsp_out) return -1;
     if (argc < 0 || argc > EXEC_MAX_ARGS || (argc > 0 && !argv)) return -1;
     if (!processes[pid].pml4_phys) return -1;

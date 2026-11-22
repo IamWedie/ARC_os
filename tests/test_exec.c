@@ -216,6 +216,31 @@ static void test_exec_load_image(void) {
           (unsigned long long)used_before_fail,
           (unsigned long long)exec_stub_used_pages());
 
+    /* The RAM filesystem caps images at FS_MAX_FILESIZE; one byte over must
+     * be rejected even though it still fits in USER_FRAME_PAGES. */
+    static uint8_t big_image[FS_MAX_FILESIZE + 1u];
+    memset(big_image, 0x3C, sizeof(big_image));
+    memcpy(saved, processes[pid].owned, sizeof(saved));
+    used_before_fail = exec_stub_used_pages();
+    rsp_bad = 0xFEEDFACEULL;
+    exec_stub_cr3_pid = -1;
+
+    CHECK(exec_load_image(pid, big_image, FS_MAX_FILESIZE + 1u,
+                          argv, 2, &rsp_bad) == -1,
+          "image above FS_MAX_FILESIZE accepted");
+    CHECK(processes[pid].pml4_phys == new_root,
+          "root changed on FS-limit failure");
+    CHECK(memcmp(processes[pid].owned, saved, sizeof(saved)) == 0,
+          "owned[] changed on FS-limit failure");
+    CHECK(rsp_bad == 0xFEEDFACEULL,
+          "user_rsp_out changed on FS-limit failure");
+    CHECK(exec_stub_cr3_pid == -1,
+          "CR3 reloaded on FS-limit failure (got %d)", exec_stub_cr3_pid);
+    CHECK(exec_stub_used_pages() == used_before_fail,
+          "PMM changed on FS-limit failure: %llu -> %llu",
+          (unsigned long long)used_before_fail,
+          (unsigned long long)exec_stub_used_pages());
+
     /* Teardown: released frames and page tables bring the PMM back to zero. */
     pmm_free_pages((void*)(uintptr_t)processes[pid].owned[0].base,
                    (size_t)processes[pid].owned[0].pages);
