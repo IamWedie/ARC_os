@@ -289,6 +289,10 @@ void exec_install_programs(void) {
     if (slot < 0) return;
     if (fs_slot_add_ref(slot) != 0) return;
 
+    /* A persisted slot from an older, larger image must not keep its size or
+     * trailing bytes: fs_slot_write only ever grows a file. Truncate does not
+     * touch open_refs, so the one add-ref / one release pattern still holds. */
+    fs_slot_truncate(slot);
     fs_slot_write(slot, 0, _binary_user_hello_bin_start, size);
     fs_slot_release(slot);
 }

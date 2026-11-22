@@ -662,6 +662,46 @@ static void test_exec_install_programs(void) {
           "boot registry leaked %d slot refs", exec_stub_total_refs());
 }
 
+/* ------------------------------------------------------------------ */
+/* Test 10: boot registry replaces a stale persisted hello.bin          */
+/* ------------------------------------------------------------------ */
+
+static void test_exec_install_programs_truncates_stale_slot(void) {
+    printf("\n=== Test 10: exec_install_programs truncates a stale hello.bin ===\n");
+    reset_world();
+
+    /* Simulate a persisted slot written by an older, larger blob. */
+    int stale = fs_open_slot("hello.bin", 1);
+    CHECK(stale >= 0, "setup fs_open_slot for stale hello.bin failed");
+    if (stale < 0) return;
+    CHECK(fs_slot_add_ref(stale) == 0, "setup add_ref failed");
+    uint8_t old_data[32];
+    memset(old_data, 0xCC, sizeof(old_data));
+    CHECK(fs_slot_write(stale, 0, old_data, sizeof(old_data)) ==
+              (int)sizeof(old_data),
+          "setup stale write failed");
+    fs_slot_release(stale);
+    CHECK(fs_slot_size(stale) == (int)sizeof(old_data),
+          "setup stale size %d, want %u", fs_slot_size(stale),
+          (unsigned)sizeof(old_data));
+
+    exec_install_programs();
+
+    size_t blob_size = (size_t)_binary_user_hello_bin_size;
+    CHECK(fs_slot_size(stale) == (int)blob_size,
+          "hello.bin size %d, want %u after reinstall",
+          fs_slot_size(stale), (unsigned)blob_size);
+
+    uint8_t tail[8] = {0};
+    int n = fs_slot_read(stale, (uint32_t)blob_size, tail, sizeof(tail));
+    CHECK(n == 0, "read past reinstalled blob returned %d stale bytes", n);
+    for (size_t i = 0; i < sizeof(tail); i++)
+        CHECK(tail[i] == 0, "stale byte %u = 0x%02x at offset %u",
+              (unsigned)i, tail[i], (unsigned)(blob_size + i));
+    CHECK(exec_stub_total_refs() == 0, "reinstall leaked %d slot refs",
+          exec_stub_total_refs());
+}
+
 int main(void) {
     printf("ARC OS exec-loader test (real kernel sources)\n");
 
@@ -674,6 +714,7 @@ int main(void) {
     test_exec_syscall_dispatch();
     test_exec_accepts_eight_args();
     test_exec_install_programs();
+    test_exec_install_programs_truncates_stale_slot();
 
     printf("\n=== Results ===\n");
     printf("  passed: %d\n", tests_passed);
