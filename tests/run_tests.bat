@@ -107,7 +107,7 @@ if errorlevel 1 exit /b 1
 echo [13/13] Building and running gui test against real kernel sources...
 "%GCC%" -O2 -Wall -Wextra -std=gnu11 -I kernel ^
     tests\test_gui.c tests\gui_stub.c ^
-    kernel\mouse.c ^
+    kernel\mouse.c kernel\compositor.c ^
     -o tests\test_gui.exe
 if errorlevel 1 exit /b 1
 
