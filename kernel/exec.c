@@ -176,14 +176,16 @@ static int exec_copy_user_cstr(uint64_t root_phys, uint64_t va, char* buf,
 
 /*
  * Copy at most EXEC_MAX_ARGS user pointers and their strings into kernel stack
- * buffers. A missing terminator, an overlong/empty string or a bad pointer is
- * rejected before any process state is touched.
+ * buffers, then read one more slot for the required NULL terminator. That extra
+ * read is what lets a full 8-argument argv succeed. A missing terminator, an
+ * overlong/empty string or a bad pointer is rejected before any process state
+ * is touched.
  */
 static int exec_copy_user_argv(uint64_t root_phys, uint64_t argv_va,
                                char* argbuf[EXEC_MAX_ARGS],
                                char storage[EXEC_MAX_ARGS][EXEC_MAX_ARG_LEN + 1],
                                int* argc_out) {
-    for (int i = 0; i < EXEC_MAX_ARGS; i++) {
+    for (int i = 0; i <= EXEC_MAX_ARGS; i++) {
         uint64_t ptr = 0;
         if (exec_read_user(root_phys,
                            argv_va + (uint64_t)(size_t)i * 8u,
@@ -192,12 +194,13 @@ static int exec_copy_user_argv(uint64_t root_phys, uint64_t argv_va,
             *argc_out = i;
             return 0;
         }
+        if (i == EXEC_MAX_ARGS) return -1; /* more than EXEC_MAX_ARGS args */
         int len = exec_copy_user_cstr(root_phys, ptr, storage[i],
                                       EXEC_MAX_ARG_LEN + 1u);
         if (len <= 0 || len > EXEC_MAX_ARG_LEN) return -1;
         argbuf[i] = storage[i];
     }
-    return -1; /* more than EXEC_MAX_ARGS entries, or no NULL terminator */
+    return -1; /* unreachable: the loop reads the terminator at slot argc */
 }
 
 long sys_exec(const char* path, char* const argv[]) {

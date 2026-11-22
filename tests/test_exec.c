@@ -569,6 +569,61 @@ static void test_exec_syscall_dispatch(void) {
     exec_teardown_world(&w);
 }
 
+static void test_exec_accepts_eight_args(void) {
+    printf("\n=== Test 8: SYS_EXEC accepts exactly EXEC_MAX_ARGS arguments ===\n");
+    exec_world_t w;
+    if (exec_setup_world(&w) != 0) { CHECK(0, "setup failed"); return; }
+    exec_make_image("hello.bin");
+    exec_write_args(&w, "hello.bin");
+
+    /* Eight non-NULL entries plus the required NULL at slot 8. */
+    static const char* const eight_args[EXEC_MAX_ARGS] = {
+        "arg0", "arg1", "arg2", "arg3",
+        "arg4", "arg5", "arg6", "arg7"
+    };
+    char* expected_argv[EXEC_MAX_ARGS + 1];
+    uint64_t* ptrs = (uint64_t*)(void*)(w.arg_page + 0x100);
+    for (int i = 0; i < EXEC_MAX_ARGS; i++) {
+        ptrs[i] = EXEC_TEST_ARG_VA + 0x200u + (uint64_t)i * 0x40u;
+        strcpy((char*)w.arg_page + 0x200u + (size_t)i * 0x40u,
+               eight_args[i]);
+        expected_argv[i] = (char*)eight_args[i];
+    }
+    ptrs[EXEC_MAX_ARGS] = 0;
+    expected_argv[EXEC_MAX_ARGS] = NULL;
+
+    CHECK(sys_exec((const char*)(uintptr_t)EXEC_TEST_ARG_VA,
+                   (char* const*)(uintptr_t)EXEC_TEST_ARGV_VA) == 0,
+          "sys_exec rejected exactly 8 arguments (argc == EXEC_MAX_ARGS)");
+    CHECK(w.frame.rip == USER_CODE_VA, "eight-arg exec did not rewrite rip");
+
+    static uint8_t scratch[4096];
+    uint64_t expected_rsp = exec_build_user_stack(scratch, sizeof(scratch),
+                                                  expected_argv, EXEC_MAX_ARGS);
+    CHECK(w.frame.user_rsp == expected_rsp,
+          "user_rsp 0x%llx, want loader value 0x%llx",
+          (unsigned long long)w.frame.user_rsp,
+          (unsigned long long)expected_rsp);
+
+    if (w.frame.user_rsp >= USER_STACK_VA && w.frame.user_rsp < USER_STACK_TOP) {
+        uint64_t off = USER_STACK_TOP - w.frame.user_rsp;
+        if (off >= 8 && off <= USER_STACK_PAGES * 4096u -
+                                  (EXEC_MAX_ARGS + 2u) * 8u) {
+            uint8_t* stack_phys =
+                (uint8_t*)(uintptr_t)processes[w.pid].owned[1].base;
+            uint64_t* words = (uint64_t*)(void*)(stack_phys +
+                                        USER_STACK_PAGES * 4096u - (size_t)off);
+            CHECK(words[0] == EXEC_MAX_ARGS, "argc word %llu, want 8",
+                  (unsigned long long)words[0]);
+            CHECK(words[EXEC_MAX_ARGS] != 0 &&
+                      words[EXEC_MAX_ARGS + 1] == 0,
+                  "argv table is not terminated after 8 entries");
+        }
+    }
+
+    exec_teardown_world(&w);
+}
+
 int main(void) {
     printf("ARC OS exec-loader test (real kernel sources)\n");
 
@@ -579,6 +634,7 @@ int main(void) {
     test_exec_rejects_bad_user_pointer();
     test_exec_close_on_exec();
     test_exec_syscall_dispatch();
+    test_exec_accepts_eight_args();
 
     printf("\n=== Results ===\n");
     printf("  passed: %d\n", tests_passed);
