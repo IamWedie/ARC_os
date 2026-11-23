@@ -19,6 +19,7 @@
 #define SYS_FORK 14
 #define SYS_WAIT 15
 #define SYS_EXEC 16
+#define SYS_SYNC 22
 
 /* Open flags (must match kernel.h) */
 #define O_RDONLY 0x0000
@@ -98,6 +99,7 @@ static void run_command(const char* cmd) {
         print_str("  mv <src> <dst>      - Move/rename a file\n");
         print_str("  truncate <file>     - Empty a file\n");
         print_str("  rm <file>           - Delete a file\n");
+        print_str("  sync                - Flush filesystem to disk\n");
         print_str("  forktest            - Prove fork/wait with a child\n");
         print_str("  execdemo            - Prove fork -> exec -> wait with hello.bin\n");
         print_str("  exit                - Exit shell\n");
@@ -289,6 +291,13 @@ static void run_command(const char* cmd) {
         }
         syscall4(SYS_TRUNC, fd, 0, 0);
         syscall4(SYS_CLOSE, fd, 0, 0);
+        return;
+    }
+
+    if (starts_with(cmd, "sync")) {
+        long r = syscall4(SYS_SYNC, 0, 0, 0);
+        if (r == 0) print_str("sync: 0\n");
+        else print_str("sync: -1\n");
         return;
     }
 

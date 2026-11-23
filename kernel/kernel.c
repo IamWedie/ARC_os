@@ -46,6 +46,8 @@ void kernel_main(uint64_t boot_info_addr, uint64_t boot_magic) {
     }
 
     acpi_init();
+    pci_init();
+    ahci_init();
 
     terminal_putstring("Physical memory: ");
     terminal_print_int(pmm_total_mem() >> 20);

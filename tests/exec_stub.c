@@ -294,3 +294,6 @@ int fs_rename(const char* oldname, const char* newname) {
     (void)newname;
     return -1;
 }
+
+int vfs_sync(const char* mount) { (void)mount; return 0; }
+int vfs_sync_all(void) { return 0; }

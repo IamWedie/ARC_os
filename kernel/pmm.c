@@ -150,6 +150,29 @@ void* pmm_alloc_pages(size_t count) {
     return NULL;
 }
 
+void* pmm_alloc_pages_below4g(size_t count) {
+    if (count == 0) count = 1;
+    uint64_t limit = (4ULL << 30) / PMM_PAGE_SIZE;
+    if (limit > PMM_MAX_PAGES) limit = PMM_MAX_PAGES;
+    uint64_t run = 0;
+    for (uint64_t f = 0; f < limit; f++) {
+        if (pmm_is_free(f)) {
+            run++;
+            if (run == count) {
+                uint64_t start = f + 1 - run;
+                for (uint64_t i = start; i < start + count; i++) {
+                    pmm_set(i);
+                    pmm_free_frames--;
+                }
+                return (void*)(start << 12);
+            }
+        } else {
+            run = 0;
+        }
+    }
+    return NULL;
+}
+
 void pmm_free_pages(void* addr, size_t count) {
     uint64_t frame = (uint64_t)addr >> 12;
     for (uint64_t i = 0; i < count; i++) {

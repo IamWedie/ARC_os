@@ -425,6 +425,8 @@ def main(argv):
         "-I" + os.path.join(ROOT, "kernel"),
         "-I" + os.path.join(ROOT, "lib"),
     ]
+    if os.environ.get("AHCI_SELFTEST") == "1":
+        CC64.append("-DAHCI_SELFTEST")
 
     log("\n[1/5] compiling kernel and libc objects")
     objs = compile_kernel(zig)

@@ -11,6 +11,16 @@ uint8_t inb(uint16_t port) {
     return v;
 }
 
+void outl(uint16_t port, uint32_t val) {
+    __asm__ volatile("outl %0, %1" : : "a"(val), "Nd"(port));
+}
+
+uint32_t inl(uint16_t port) {
+    uint32_t v;
+    __asm__ volatile("inl %1, %0" : "=a"(v) : "Nd"(port));
+    return v;
+}
+
 /* Timer interrupt handler (IRQ0, vector 32). With the LAPIC enabled vetor
  * 0x40 is the preemption tick; this only acknowledges the PIT slot and
  * feeds the calibration counter. EOI'ing both the PIC and the LAPIC keeps

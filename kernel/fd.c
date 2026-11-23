@@ -300,3 +300,10 @@ int fd_truncate(int pid, int fd) {
     ofd->offset = 0;
     return 0;
 }
+
+int fd_fsync(int pid, int fd) {
+    fd_entry_t* entry = fd_lookup(pid, fd);
+    if (!entry || entry->kind == FD_ENTRY_FREE) return -1;
+    if (entry->kind != FD_ENTRY_FILE) return -1;
+    return vfs_sync_all();
+}

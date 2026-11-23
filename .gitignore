@@ -9,3 +9,6 @@ iso/
 __pycache__/
 *.pyc
 .worktrees/
+artifacts/
+build/
+out/

@@ -53,6 +53,7 @@ struct pmm_region {
 
 void pmm_init(const struct bootinfo* bi);
 void* pmm_alloc_pages(size_t count);
+void* pmm_alloc_pages_below4g(size_t count);
 void pmm_free_pages(void* addr, size_t count);
 void pmm_reserve_range(uint64_t base, uint64_t len);
 uint64_t pmm_total_mem(void);
@@ -116,6 +117,8 @@ void exec_install_programs(void);
 #define PT_PG_PRESENT (1ULL << 0)
 #define PT_PG_RW      (1ULL << 1)
 #define PT_PG_USER    (1ULL << 2)
+#define PT_PG_PWT     (1ULL << 3)
+#define PT_PG_PCD     (1ULL << 4)
 #define PT_PG_PSE     (1ULL << 7)
 
 /*
@@ -180,6 +183,8 @@ void set_tss_rsp0(uint64_t rsp);
 void interrupts_init(void);
 void outb(uint16_t port, uint8_t val);
 uint8_t inb(uint16_t port);
+void outl(uint16_t port, uint32_t val);
+uint32_t inl(uint16_t port);
 void irq0_stub(void);
 void irq1_stub(void);
 void irq12_stub(void);
@@ -401,6 +406,7 @@ int fd_write(int pid, int fd, const void* buf, size_t count);
 int fd_seek(int pid, int fd, int64_t offset, int whence);
 int fd_size(int pid, int fd);
 int fd_truncate(int pid, int fd);
+int fd_fsync(int pid, int fd);
 
 /* Filesystem */
 #define FS_SECTOR_SIZE 512
@@ -426,6 +432,8 @@ typedef struct {
 void fs_init(void);
 int fs_delete(const char* name);
 int fs_list(void);
+struct arc_dirent;
+int fs_readdir(const char* path, uint32_t index, struct arc_dirent* out);
 int fs_rename(const char* oldname, const char* newname);
 
 /*
@@ -441,6 +449,88 @@ int fs_slot_size(int slot);
 int fs_slot_truncate(int slot);
 int fs_slot_add_ref(int slot);
 void fs_slot_release(int slot);
+
+/* M4 VFS / persistence */
+struct blockdev;
+struct arc_stat;
+struct arc_dirent;
+#define VFS_NAME_MAX 64
+#define VFS_MAX_MOUNTS 4
+
+struct arc_stat {
+    uint32_t size;
+    uint32_t is_dir;
+    uint32_t attrs;
+    uint32_t reserved;
+};
+
+struct arc_dirent {
+    char name[VFS_NAME_MAX];
+    uint32_t size;
+    uint32_t is_dir;
+};
+
+struct vfs_node;
+struct vfs_ops {
+    int (*open)(void* ctx, const char* path, int create, int* out_slot);
+    int (*read)(void* ctx, int slot, uint32_t off, void* buf, size_t count);
+    int (*write)(void* ctx, int slot, uint32_t off, const void* buf, size_t count);
+    int (*size)(void* ctx, int slot);
+    int (*truncate)(void* ctx, int slot);
+    int (*close_slot)(void* ctx, int slot);
+    int (*add_ref)(void* ctx, int slot);
+    void (*release)(void* ctx, int slot);
+    int (*stat)(void* ctx, const char* path, struct arc_stat* st);
+    int (*readdir)(void* ctx, const char* path, uint32_t index, struct arc_dirent* out);
+    int (*mkdir)(void* ctx, const char* path);
+    int (*unlink)(void* ctx, const char* path);
+    int (*rename)(void* ctx, const char* oldname, const char* newname);
+    int (*sync)(void* ctx);
+};
+
+int vfs_mount(const char* path, const struct vfs_ops* ops, void* ctx, struct blockdev* dev);
+int vfs_stat(const char* path, struct arc_stat* st);
+int vfs_readdir(const char* path, uint32_t index, struct arc_dirent* out);
+int vfs_mkdir(const char* path);
+int vfs_unlink(const char* path);
+int vfs_mount_device(const char* devname, const char* fstype, const char* target);
+int vfs_sync(const char* mount);
+int vfs_sync_all(void);
+
+/* Partition */
+struct part_info {
+    uint32_t lba_start;
+    uint32_t sector_count;
+    uint8_t type;
+    uint8_t valid;
+    uint8_t gpt_type; /* 0=MBR/none, 1=Basic Data, 2=ESP, 3=other GPT */
+};
+int part_probe(struct blockdev* dev, struct part_info* out, int max);
+int storage_part_probe_fat32(const struct part_info *p, int qemu_fallback_pass, int dev_is_qemu);
+int storage_root_can_select(int qualifies_arcroot, int is_esp, int qemu_fallback_pass, int dev_is_qemu);
+int storage_is_esp(const struct part_info *p);
+void ata_ident_string(char *dst, int dst_len, const uint16_t *src_words, int word_count);
+void ata_identify_model(char *dst, int dst_len, const uint16_t words[256]);
+int storage_model_is_qemu(const char *model);
+
+/* FAT32 */
+int fat32_mount(struct blockdev* dev, uint32_t lba_start, uint32_t sector_count);
+int fat32_unmount(void);
+int fat32_is_mounted(void);
+int fat32_qualifies_arcroot(void);
+int fat32_open_slot(const char* name, int create);
+int fat32_slot_read(int slot, uint32_t off, void* buf, size_t count);
+int fat32_slot_write(int slot, uint32_t off, const void* buf, size_t count);
+int fat32_slot_size(int slot);
+int fat32_slot_truncate(int slot);
+int fat32_slot_add_ref(int slot);
+void fat32_slot_release(int slot);
+int fat32_delete(const char* name);
+int fat32_rename(const char* oldname, const char* newname);
+int fat32_list(void);
+int fat32_stat(const char* path, struct arc_stat* st);
+int fat32_readdir(const char* path, uint32_t index, struct arc_dirent* out);
+int fat32_mkdir(const char* path);
 
 /* Serial (COM1) */
 void serial_putchar(char c);
@@ -473,9 +563,234 @@ extern volatile int pit_tick_count;
 void ioapic_init(void);
 int ioapic_active(void);
 
+/* PCI */
+#define PCI_MAX_DEVICES 64
+
+struct pci_device {
+    uint8_t bus, slot, func;
+    uint16_t vendor, device;
+    uint8_t class_code, subclass, progif, revision;
+    uint8_t header_type;
+    uint8_t irq_line, irq_pin;
+    uint32_t bar[6];
+};
+
+void pci_init(void);
+int pci_device_count(void);
+const struct pci_device* pci_device_get(int i);
+const struct pci_device* pci_find_class(uint8_t class_code, uint8_t subclass, int idx);
+uint32_t pci_config_read32(uint8_t bus, uint8_t slot, uint8_t func, uint8_t off);
+void pci_config_write32(uint8_t bus, uint8_t slot, uint8_t func, uint8_t off, uint32_t val);
+
+/* AHCI (M4.4) */
+#define AHCI_CAP2_BOH           (1u << 0)
+#define AHCI_BOHC_BOS           (1u << 0)
+#define AHCI_BOHC_OOS           (1u << 1)
+#define AHCI_BOHC_BB            (1u << 4)
+
+#define AHCI_BOHC_UNSUPPORTED   0
+#define AHCI_BOHC_ALREADY_OWNED 1
+#define AHCI_BOHC_SUCCESS       2
+#define AHCI_BOHC_BB_TIMEOUT    3
+
+typedef struct {
+    uint32_t cap2;
+    uint32_t bohc;
+} ahci_bohc_state_t;
+
+void ahci_init(void);
+int ahci_present(void);
+uint32_t ahci_bar5(void);
+
+#define AHCI_SIG_ATA    0x00000101u
+#define AHCI_SIG_ATAPI  0xEB140101u
+#define AHCI_SIG_SEMB   0xC33C0101u
+#define AHCI_SIG_PM     0x96690101u
+
+#define AHCI_PORT_CMD_ST  (1u << 0)
+#define AHCI_PORT_CMD_FRE (1u << 4)
+#define AHCI_PORT_CMD_FR  (1u << 14)
+#define AHCI_PORT_CMD_CR  (1u << 15)
+
+#define AHCI_PORT_TFD_BSY (1u << 7)
+#define AHCI_PORT_TFD_DRQ (1u << 3)
+#define AHCI_PORT_TFD_ERR (1u << 0)
+#define AHCI_PORT_IS_TFES (1u << 30)
+
+typedef struct {
+    uint32_t cmd;
+    uint32_t tfd;
+    uint32_t serr;
+    uint32_t is;
+    uint32_t ssts;
+    uint32_t sig;
+    uint32_t ci;
+} ahci_fake_port_t;
+
+typedef struct {
+    int port;
+    uint32_t sig;
+    uint64_t clb;
+    uint64_t fb;
+    uint64_t ctba;
+    int started;
+    int busy;
+    int failed;
+    int identify_ok;
+    char model[41];
+    char serial[21];
+    char firmware[9];
+    uint64_t sectors;
+    int lba48;
+    uint32_t sector_size;
+    int flush_supported;
+    int flush_ext_supported;
+    int rw_dma_ext_supported;
+    int writable;
+    int bd_registered;
+    int bd_failed_logged;
+    char bd_name[8];
+} ahci_port_state_t;
+
+/* Host-testable AHCI helpers */
+int ahci_bar_is_mmio32(uint32_t bar);
+uint32_t ahci_bar_base(uint32_t bar);
+uint32_t ahci_cap_np(uint32_t cap);
+int ahci_cap_s64a(uint32_t cap);
+uint32_t ahci_pi_popcount(uint32_t pi);
+int ahci_bohc_run(ahci_bohc_state_t *r,
+                  int (*wait_bos_clear)(ahci_bohc_state_t *r, uint32_t timeout_ms, uint32_t *elapsed_ms),
+                  int (*wait_bb_clear)(ahci_bohc_state_t *r, uint32_t timeout_ms, uint32_t *elapsed_ms),
+                  uint32_t *elapsed_ms);
+uint32_t ahci_ssts_det(uint32_t ssts);
+uint32_t ahci_ssts_ipm(uint32_t ssts);
+int ahci_sig_is_sata(uint32_t sig);
+const char* ahci_sig_name(uint32_t sig);
+int ahci_port_layout_ok(uint64_t page_phys);
+int ahci_port_stop_sim(ahci_fake_port_t *p,
+                       int (*wait_clear)(ahci_fake_port_t *p, uint32_t mask, uint32_t timeout_ms, uint32_t *elapsed_ms),
+                       uint32_t *elapsed_ms);
+int ahci_port_start_sim(ahci_fake_port_t *p,
+                        int (*wait_tfd_ready)(ahci_fake_port_t *p, uint32_t timeout_ms, uint32_t *elapsed_ms),
+                        uint32_t *elapsed_ms);
+
+#define AHCI_FIS_TYPE_REG_H2D 0x27u
+#define ATA_CMD_IDENTIFY      0xECu
+
+typedef struct {
+    uint8_t fis[20];
+} ahci_h2d_fis_t;
+
+typedef struct {
+    uint32_t dw0;
+    uint32_t prdbc;
+    uint32_t ctba;
+    uint32_t ctbau;
+    uint32_t rsv[4];
+} ahci_cmd_header_t;
+
+typedef struct {
+    uint32_t dba;
+    uint32_t dbau;
+    uint32_t rsv;
+    uint32_t dbc_i;
+} ahci_prdt_entry_t;
+
+typedef struct {
+    char model[41];
+    char serial[21];
+    char firmware[9];
+    uint64_t sectors;
+    int lba48;
+    uint32_t sector_size;
+    uint32_t phys_sector_mult;
+    int flush_supported;
+    int flush_ext_supported;
+    int rw_dma_ext_supported;
+    int lba48_assumed_enabled;
+    int supported;
+} ahci_identify_result_t;
+
+void ahci_build_h2d_identify(uint8_t fis[20]);
+void ahci_build_cmd_header(ahci_cmd_header_t *h, uint32_t ctba, uint32_t ctbau);
+void ahci_build_prdt(ahci_prdt_entry_t *p, uint64_t dba, uint32_t byte_count);
+int ahci_identify_parse(const uint16_t words[256], ahci_identify_result_t *out);
+int ahci_identify_poll_sim(ahci_fake_port_t *p,
+                           int (*step)(ahci_fake_port_t *p, uint32_t iter),
+                           uint32_t max_iters,
+                           uint32_t *prdbc_out);
+int ahci_cmd_poll_sim(ahci_fake_port_t *p,
+                      int (*step)(ahci_fake_port_t *p, uint32_t iter),
+                      uint32_t max_iters,
+                      uint32_t expected_prdbc,
+                      uint32_t *prdbc_out);
+int ahci_walk_virt_to_phys(const uint64_t *pml4, uint64_t va, uint64_t *pa_out);
+int ahci_port_can_register(int identify_ok, int started, uint32_t sector_size, int rw_dma_ext_supported, int failed);
+int ahci_write_policy_writable(const char *model, int is_root, int has_flush_ext, int arc_ahci_write_real);
+int ahci_split_rw(uint64_t total_sectors, uint64_t lba, uint32_t count,
+                  int (*do_chunk)(void *ctx, uint64_t lba, uint32_t count, uint32_t done), void *ctx,
+                  uint32_t *done_out);
+void ahci_apply_write_policy(const char* root_name);
+int ahci_dev_model_is_qemu(const char* name);
+
+#define AHCI_MAX_SECTORS 128u
+
+#define AHCI_OK              0
+#define AHCI_ERR_BADARG     -1
+#define AHCI_ERR_RANGE      -2
+#define AHCI_ERR_UNSUPPORTED -3
+#define AHCI_ERR_BUSY       -4
+#define AHCI_ERR_TIMEOUT    -5
+#define AHCI_ERR_DEV        -6
+
+#define ATA_CMD_READ_DMA_EXT    0x25u
+#define ATA_CMD_WRITE_DMA_EXT   0x35u
+#define ATA_CMD_FLUSH_CACHE_EXT 0xEAu
+
+extern int ahci_writes_enabled;
+
+void ahci_build_h2d_rw(uint8_t fis[20], uint8_t cmd, uint64_t lba, uint16_t count);
+void ahci_build_h2d_flush(uint8_t fis[20]);
+void ahci_build_cmd_header_ex(ahci_cmd_header_t *h, uint16_t prdtl, int write, uint32_t ctba, uint32_t ctbau);
+int ahci_prdt_build(ahci_prdt_entry_t *prdt, uint32_t max_entries, uint64_t phys_addr, uint32_t bytes);
+typedef uint64_t (*ahci_phys_lookup_fn)(void *ctx, uint64_t va, int *ok);
+int ahci_prdt_build_from_va(ahci_prdt_entry_t *prdt, uint32_t max_entries,
+                            ahci_phys_lookup_fn lookup, void *ctx,
+                            uint64_t va, uint32_t bytes);
+int ahci_validate_rw_args(const ahci_port_state_t *ps, uint64_t lba, uint32_t count, const void *buf);
+int ahci_validate_flush_args(const ahci_port_state_t *ps);
+int ahci_error_from_status(uint32_t is, uint32_t tfd);
+
+int ahci_read(uint32_t port, uint64_t lba, uint32_t count, void* buf);
+int ahci_write(uint32_t port, uint64_t lba, uint32_t count, const void* buf);
+int ahci_flush(uint32_t port);
+
+/* Block device */
+#define BLOCK_SECTOR_SIZE 512
+#define BLOCKDEV_MAX 4
+
+struct blockdev {
+    const char* name;
+    uint32_t sector_count;
+    int (*read)(struct blockdev* dev, uint32_t lba, uint32_t count, void* buf);
+    int (*write)(struct blockdev* dev, uint32_t lba, uint32_t count, const void* buf);
+    int (*flush)(struct blockdev* dev);
+    void* ctx;
+    int read_only;
+};
+
+int blockdev_register(struct blockdev* dev);
+struct blockdev* blockdev_get(int idx);
+int blockdev_count(void);
+struct blockdev* blockdev_find(const char* name);
+int blockdev_read(struct blockdev* dev, uint32_t lba, uint32_t count, void* buf);
+int blockdev_write(struct blockdev* dev, uint32_t lba, uint32_t count, const void* buf);
+int blockdev_flush(struct blockdev* dev);
+
 /* ATA PIO */
 int ata_init(void);
 int ata_present(void);
+int ata_model_is_qemu(void);
 int ata_read_sectors(uint32_t lba, uint8_t count, void* buf);
 int ata_write_sectors(uint32_t lba, uint8_t count, const void* buf);
 void ata_irq_handler(void);
@@ -522,6 +837,13 @@ extern const uint8_t _binary_user_hello_bin_size[];
 #define SYS_FORK  14
 #define SYS_WAIT  15
 #define SYS_EXEC  16
+#define SYS_STAT    17
+#define SYS_READDIR 18
+#define SYS_MKDIR   19
+#define SYS_UNLINK  20
+#define SYS_MOUNT   21
+#define SYS_SYNC    22
+#define SYS_FSYNC   23
 
 /* Kernel entry */
 void kernel_main(uint64_t boot_info, uint64_t boot_magic);

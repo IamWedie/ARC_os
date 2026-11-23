@@ -122,4 +122,45 @@ echo [14/14] Building and running bootinfo/MB2 parser test...
 if errorlevel 1 exit /b 1
 
 tests\test_bootinfo.exe
+if errorlevel 1 exit /b 1
+
+echo [15/15] Building and running FAT32 host test...
+"%GCC%" -O2 -Wall -Wextra -std=gnu11 -I kernel -I lib ^
+    tests\test_fat32.c tests\fat32_stub.c ^
+    kernel\fat32.c ^
+    -o tests\test_fat32.exe
+if errorlevel 1 exit /b 1
+
+tests\test_fat32.exe
+if errorlevel 1 exit /b 1
+
+echo [16/16] Building and running sync/flush contract test...
+"%GCC%" -O2 -Wall -Wextra -std=gnu11 -I kernel -I lib ^
+    tests\test_sync.c tests\sync_stub.c ^
+    kernel\vfs.c kernel\blockdev.c ^
+    -o tests\test_sync.exe
+if errorlevel 1 exit /b 1
+
+tests\test_sync.exe
+if errorlevel 1 exit /b 1
+
+echo [17/18] Building and running AHCI host test...
+"%GCC%" -O2 -Wall -Wextra -std=gnu11 -I kernel -I lib -DAHCI_HOST_TEST ^
+    tests\test_ahci.c ^
+    kernel\ahci.c ^
+    kernel\storage_policy.c ^
+    -o tests\test_ahci.exe
+if errorlevel 1 exit /b 1
+
+tests\test_ahci.exe
+if errorlevel 1 exit /b 1
+
+echo [18/18] Building and running storage boot policy host test...
+"%GCC%" -O2 -Wall -Wextra -std=gnu11 -I kernel -I lib ^
+    tests\test_storage_policy.c ^
+    kernel\storage_policy.c ^
+    -o tests\test_storage_policy.exe
+if errorlevel 1 exit /b 1
+
+tests\test_storage_policy.exe
 exit /b %errorlevel%

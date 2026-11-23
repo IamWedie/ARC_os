@@ -179,3 +179,6 @@ void fs_slot_release(int slot) {
         memset(&slots[slot], 0, sizeof(slots[slot]));
     }
 }
+
+int vfs_sync(const char* mount) { (void)mount; return 0; }
+int vfs_sync_all(void) { return 0; }

@@ -1,5 +1,15 @@
 #include "kernel.h"
 
+#if defined(__STDC_HOSTED__) && (__STDC_HOSTED__ == 1)
+__attribute__((weak)) int fat32_is_mounted(void) { return 0; }
+__attribute__((weak)) int vfs_stat(const char* path, struct arc_stat* st) { (void)path; (void)st; return -1; }
+__attribute__((weak)) int vfs_readdir(const char* path, uint32_t index, struct arc_dirent* out) { (void)path; (void)index; (void)out; return -1; }
+__attribute__((weak)) int vfs_mkdir(const char* path) { (void)path; return -1; }
+__attribute__((weak)) int vfs_unlink(const char* path) { (void)path; return -1; }
+__attribute__((weak)) int vfs_mount_device(const char* devname, const char* fstype, const char* target) { (void)devname; (void)fstype; (void)target; return -1; }
+__attribute__((weak)) int fs_readdir(const char* path, uint32_t index, struct arc_dirent* out) { (void)path; (void)index; (void)out; return -1; }
+#endif
+
 /* Flags accepted by SYS_OPEN. O_ACCMODE covers O_RDONLY/O_WRONLY/O_RDWR. */
 #define SYSCALL_OPEN_FLAG_MASK \
     ((uint64_t)(O_ACCMODE | O_CREAT | O_TRUNC | O_APPEND))
@@ -59,6 +69,53 @@ long syscall_dispatch(uint64_t n, uint64_t a1, uint64_t a2, uint64_t a3) {
     case SYS_FORK:  return sys_fork();
     case SYS_WAIT:  return sys_wait((int*)a1);
     case SYS_EXEC:  return sys_exec((const char*)a1, (char* const*)a2);
+    case SYS_STAT: {
+        struct arc_stat st;
+        const char* path = (const char*)a1;
+        struct arc_stat* out = (struct arc_stat*)a2;
+        if (!path || !out) return -1;
+        if (fat32_is_mounted()) {
+            if (vfs_stat(path, &st) != 0) return -1;
+        } else {
+            const char* name = path;
+            if (name[0] == '/' && name[1] != '\0') name++;
+            if (name[0] == '/' && name[1] == '\0') { st.size=0; st.is_dir=1; st.attrs=0; st.reserved=0; *out=st; return 0; }
+            int slot = fs_open_slot(name, 0);
+            if (slot < 0) return -1;
+            st.size = (uint32_t)fs_slot_size(slot);
+            st.is_dir = 0;
+            st.attrs = 0;
+            st.reserved = 0;
+        }
+        *out = st;
+        return 0;
+    }
+    case SYS_READDIR: {
+        const char* path = (const char*)a1;
+        uint32_t idx = (uint32_t)a2;
+        struct arc_dirent* out = (struct arc_dirent*)a3;
+        if (!path || !out) return -1;
+        return fs_readdir(path, idx, out);
+    }
+    case SYS_MKDIR:
+        if (!a1) return -1;
+        if (fat32_is_mounted()) return vfs_mkdir((const char*)a1);
+        return -1;
+    case SYS_UNLINK:
+        if (!a1) return -1;
+        if (fat32_is_mounted()) return vfs_unlink((const char*)a1);
+        {
+            const char* name = (const char*)a1;
+            if (name[0] == '/' && name[1] != '\0') name++;
+            return fs_delete(name);
+        }
+    case SYS_MOUNT:
+        if (!a1 || !a2 || !a3) return -1;
+        return vfs_mount_device((const char*)a1, (const char*)a2, (const char*)a3);
+    case SYS_SYNC:
+        return vfs_sync_all();
+    case SYS_FSYNC:
+        return fd_fsync(pid, (int)a1);
     default:        return -1;
     }
 }
