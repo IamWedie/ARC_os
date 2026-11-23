@@ -28,14 +28,46 @@
 #define ATA_SR_DRQ  0x08
 #define ATA_SR_ERR  0x01
 
-#define ATA_CMD_IDENTIFY 0xEC
-#define ATA_CMD_READ     0x20
-#define ATA_CMD_WRITE    0x30
+#ifndef ATA_CMD_IDENTIFY
+#define ATA_CMD_IDENTIFY      0xEC
+#endif
+#define ATA_CMD_READ          0x20
+#define ATA_CMD_WRITE         0x30
+#define ATA_CMD_FLUSH_CACHE   0xE7
+#ifndef ATA_CMD_FLUSH_CACHE_EXT
+#define ATA_CMD_FLUSH_CACHE_EXT 0xEA
+#endif
 
 #define ATA_WAIT_MAX 40000000UL
 
 static int ata_ok = 0;
 static volatile int ata_irq_hit = 0;
+static uint32_t ata_sector_count = 0;
+static int ata_lba48 = 0;
+static char g_ata_model[41];
+static struct blockdev g_ata_bd;
+
+static int ata_bd_read(struct blockdev* dev, uint32_t lba, uint32_t count, void* buf) {
+    (void)dev;
+    uint8_t* p = (uint8_t*)buf;
+    while (count > 0) {
+        uint8_t n = count > 255 ? 255 : (uint8_t)count;
+        if (ata_read_sectors(lba, n, p) != 0) return -1;
+        lba += n; p += (uint32_t)n * 512u; count -= n;
+    }
+    return 0;
+}
+
+static int ata_bd_write(struct blockdev* dev, uint32_t lba, uint32_t count, const void* buf) {
+    (void)dev;
+    const uint8_t* p = (const uint8_t*)buf;
+    while (count > 0) {
+        uint8_t n = count > 255 ? 255 : (uint8_t)count;
+        if (ata_write_sectors(lba, n, p) != 0) return -1;
+        lba += n; p += (uint32_t)n * 512u; count -= n;
+    }
+    return 0;
+}
 
 static inline uint16_t inw(uint16_t port) {
     uint16_t v;
@@ -88,6 +120,30 @@ static uint8_t ata_wait_ready(void) {
 }
 
 int ata_present(void) { return ata_ok; }
+
+int ata_model_is_qemu(void) {
+    return storage_model_is_qemu(g_ata_model);
+}
+
+static int ata_flush_cache(void) {
+    if (!ata_ok) return -1;
+    preempt_disable();
+    ata_irq_hit = 0;
+    outb(ATA_DRIVE, 0xE0);
+    outb(ATA_CMD, ata_lba48 ? ATA_CMD_FLUSH_CACHE_EXT : ATA_CMD_FLUSH_CACHE);
+    uint8_t st = ata_wait_bsy();
+    if (st == 0xFF || (st & (ATA_SR_ERR | ATA_SR_DF))) {
+        preempt_enable();
+        return -1;
+    }
+    preempt_enable();
+    return 0;
+}
+
+static int ata_bd_flush(struct blockdev* dev) {
+    (void)dev;
+    return ata_flush_cache();
+}
 
 int ata_read_sectors(uint32_t lba, uint8_t count, void* buf) {
     if (!ata_ok || count == 0) return -1;
@@ -149,6 +205,7 @@ int ata_write_sectors(uint32_t lba, uint8_t count, const void* buf) {
 
 int ata_init(void) {
     ata_irq_hit = 0;
+    g_ata_model[0] = '\0';
     outb(ATA_DRIVE, 0xE0);                /* select primary master */
     if (ata_wait_bsy() == 0xFF) {
         terminal_putstring("ATA: no drive on primary master\n");
@@ -170,15 +227,36 @@ int ata_init(void) {
     uint16_t id[256];
     for (int i = 0; i < 256; i++) id[i] = inw(ATA_DATA);
 
+    ata_identify_model(g_ata_model, (int)sizeof(g_ata_model), id);
+    terminal_putstring("ATA: model=[");
+    terminal_putstring(g_ata_model);
+    terminal_putstring("]\n");
+
     if (id[0] == 0x0000 || id[0] == 0xFFFF) {
         terminal_putstring("ATA: empty IDENTIFY block\n");
         return -1;
     }
 
     uint32_t sectors = (uint32_t)id[60] | ((uint32_t)id[61] << 16);
+    ata_lba48 = (id[83] & (1u << 10)) ? 1 : 0;
+    if (ata_lba48) {
+        uint64_t s48 = (uint64_t)id[100] | ((uint64_t)id[101] << 16) |
+                       ((uint64_t)id[102] << 32) | ((uint64_t)id[103] << 48);
+        if (s48 > 0xFFFFFFFFu) s48 = 0xFFFFFFFFu;
+        if (s48 != 0) sectors = (uint32_t)s48;
+    }
+    ata_sector_count = sectors;
     ata_ok = 1;
     terminal_putstring("ATA: drive detected, ");
     terminal_print_int(sectors);
     terminal_putstring(" sectors\n");
+
+    g_ata_bd.name = "ata0";
+    g_ata_bd.sector_count = ata_sector_count;
+    g_ata_bd.read = ata_bd_read;
+    g_ata_bd.write = ata_bd_write;
+    g_ata_bd.flush = ata_bd_flush;
+    g_ata_bd.ctx = 0;
+    blockdev_register(&g_ata_bd);
     return 0;
 }
