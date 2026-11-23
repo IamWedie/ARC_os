@@ -117,6 +117,27 @@ static void fs_reclaim_deleted(int slot) {
 
 static int fs_disk_fs_local_ok = 0;
 
+#if FS_HOSTED_BUILD
+int fat32_is_mounted(void) { return 0; }
+int fat32_open_slot(const char* name, int create) { (void)name; (void)create; return -1; }
+int fat32_slot_read(int slot, uint32_t off, void* buf, size_t count) { (void)slot; (void)off; (void)buf; (void)count; return -1; }
+int fat32_slot_write(int slot, uint32_t off, const void* buf, size_t count) { (void)slot; (void)off; (void)buf; (void)count; return -1; }
+int fat32_slot_size(int slot) { (void)slot; return -1; }
+int fat32_slot_truncate(int slot) { (void)slot; return -1; }
+int fat32_slot_add_ref(int slot) { (void)slot; return -1; }
+void fat32_slot_release(int slot) { (void)slot; }
+int fat32_delete(const char* name) { (void)name; return -1; }
+int fat32_rename(const char* oldname, const char* newname) { (void)oldname; (void)newname; return -1; }
+int fat32_list(void) { return -1; }
+int fat32_stat(const char* path, struct arc_stat* st) { (void)path; (void)st; return -1; }
+int fat32_readdir(const char* path, uint32_t index, struct arc_dirent* out) { (void)path; (void)index; (void)out; return -1; }
+int fat32_mkdir(const char* path) { (void)path; return -1; }
+int fat32_mount(struct blockdev* dev, uint32_t lba_start, uint32_t sector_count) { (void)dev; (void)lba_start; (void)sector_count; return -1; }
+struct blockdev* blockdev_find(const char* name) { (void)name; return 0; }
+int part_probe(struct blockdev* dev, struct part_info* out, int max) { (void)dev; (void)out; (void)max; return 0; }
+void ahci_apply_write_policy(const char* root_name) { (void)root_name; }
+#endif
+
 /* --- persistence plumbing (write-through to the ATA disk) --- */
 
 static int fs_persist_dir(void) {
@@ -186,6 +207,92 @@ void fs_init(void) {
     if (!fs_files || !fs_bitmap || !fs_arena || !fs_dir_scratch) return;
 
     fs_disk = ata_present();
+
+    /* M4.4 E.1: deterministic boot disk selection with ARCROOT qualification.
+     * Scan ahci0..ahciN then ata0. A disk is root only if FAT32 label is
+     * ARCROOT or it contains /ARCROOT.MRK. GPT Basic Data and ESP partitions
+     * have FAT32 BPB probed; ESP is never selected as root.
+     * If no ARCROOT disk qualifies, keep today's behavior only for QEMU-prefixed
+     * model devices; otherwise mount nothing and log no ARCROOT volume found. */
+    if (!fat32_is_mounted()) {
+        int mounted = 0;
+        int any_qualifying = 0;
+        /* Pass 1: ARCROOT-qualified candidates in order. */
+        for (int pass = 0; pass < 2 && !mounted; pass++) {
+            if (pass == 1 && any_qualifying) break;
+            for (int dev_i = 0; dev_i < 33 && !mounted; dev_i++) {
+                char aname[8];
+                struct blockdev *bd = 0;
+                int is_ata = (dev_i == 32);
+                if (is_ata) {
+                    if (!fs_disk) continue;
+                    aname[0]='a'; aname[1]='t'; aname[2]='a'; aname[3]='0'; aname[4]='\0';
+                    bd = blockdev_find("ata0");
+                } else {
+                    aname[0]='a'; aname[1]='h'; aname[2]='c'; aname[3]='i';
+                    if (dev_i < 10) { aname[4]=(char)('0'+dev_i); aname[5]='\0'; }
+                    else { aname[4]=(char)('0'+(dev_i/10)); aname[5]=(char)('0'+(dev_i%10)); aname[6]='\0'; }
+                    bd = blockdev_find(aname);
+                }
+                if (!bd) continue;
+
+                int dev_is_qemu = is_ata ? ata_model_is_qemu() : ahci_dev_model_is_qemu(aname);
+                struct part_info parts[4];
+                int pn = part_probe(bd, parts, 4);
+                for (int i = 0; i < pn && !mounted; i++) {
+                    if (!parts[i].valid) continue;
+                    int is_esp = storage_is_esp(&parts[i]);
+                    if (!storage_part_probe_fat32(&parts[i], pass == 1, dev_is_qemu)) continue;
+
+                    if (fat32_mount(bd, parts[i].lba_start, parts[i].sector_count) != 0) continue;
+
+                    int qualifies = fat32_qualifies_arcroot();
+                    if (qualifies && !is_esp) any_qualifying = 1;
+                    int can_select = storage_root_can_select(qualifies, is_esp, pass == 1, dev_is_qemu);
+
+                    if (can_select) {
+                        terminal_putstring("STORAGE: root = ");
+                        terminal_putstring(aname);
+                        terminal_putstring(" partition ");
+                        terminal_print_int((uint64_t)(i + 1));
+                        terminal_putstring(" (FAT32)\n");
+                        ahci_apply_write_policy(aname);
+                        mounted = 1;
+                    } else {
+                        fat32_unmount();
+                    }
+                }
+
+                /* QEMU fallback whole-disk ATA try, as before */
+                if (!mounted && pass == 1 && is_ata && dev_is_qemu) {
+                    if (fat32_mount(bd, 0, bd->sector_count) == 0) {
+                        terminal_putstring("STORAGE: root = ata0 whole-disk (FAT32)\n");
+                        ahci_apply_write_policy("ata0");
+                        mounted = 1;
+                    }
+                }
+            }
+            if (pass == 0 && !mounted && !any_qualifying) {
+                /* no ARCROOT-qualified disk found; pass 2 will try QEMU fallback */
+            }
+        }
+        if (!mounted) {
+            if (!any_qualifying) {
+                /* check if there were any QEMU devices at all? requirement says
+                 * "otherwise mount nothing..." so if QEMU fallback also didn't mount, log. */
+                terminal_putstring("STORAGE: no ARCROOT volume found\n");
+            }
+            ahci_apply_write_policy((const char*)0);
+        }
+    }
+    if (fat32_is_mounted()) {
+        fs_disk_fs_local_ok = 1;
+        terminal_putstring("FS: FAT32 backend active\n");
+#if !FS_HOSTED_BUILD
+        fs_check_ret(fs_ret_saved);
+#endif
+        return;
+    }
 
     int mounted = 0;
     if (fs_disk) {
@@ -358,6 +465,7 @@ static void fs_selftest(void) {
  * open file description and calls fs_slot_add_ref() exactly once for it.
  */
 int fs_open_slot(const char* name, int create) {
+    if (fat32_is_mounted()) return fat32_open_slot(name, create);
     if (!name || name[0] == '\0') return -1;
 
     int slot = fs_find_slot(name);
@@ -376,6 +484,7 @@ int fs_open_slot(const char* name, int create) {
 }
 
 int fs_slot_read(int slot, uint32_t off, void* buf, size_t count) {
+    if (fat32_is_mounted()) return fat32_slot_read(slot, off, buf, count);
     if (slot < 0 || slot >= FS_MAX_FILES) return -1;
     fs_file_t* f = &fs_files[slot];
     if (!f->used) return -1;
@@ -389,6 +498,7 @@ int fs_slot_read(int slot, uint32_t off, void* buf, size_t count) {
 }
 
 int fs_slot_write(int slot, uint32_t off, const void* buf, size_t count) {
+    if (fat32_is_mounted()) return fat32_slot_write(slot, off, buf, count);
     if (slot < 0 || slot >= FS_MAX_FILES) return -1;
     fs_file_t* f = &fs_files[slot];
     if (!f->used) return -1;
@@ -420,11 +530,13 @@ int fs_slot_write(int slot, uint32_t off, const void* buf, size_t count) {
 }
 
 int fs_slot_size(int slot) {
+    if (fat32_is_mounted()) return fat32_slot_size(slot);
     if (slot < 0 || slot >= FS_MAX_FILES || !fs_files[slot].used) return -1;
     return (int)fs_files[slot].size;
 }
 
 int fs_slot_truncate(int slot) {
+    if (fat32_is_mounted()) return fat32_slot_truncate(slot);
     if (slot < 0 || slot >= FS_MAX_FILES || !fs_files[slot].used) return -1;
     fs_file_t* f = &fs_files[slot];
     if (f->blocks > 0) fs_free_extent((int)f->start_block, (int)f->blocks);
@@ -437,6 +549,7 @@ int fs_slot_truncate(int slot) {
 }
 
 int fs_slot_add_ref(int slot) {
+    if (fat32_is_mounted()) return fat32_slot_add_ref(slot);
     if (slot < 0 || slot >= FS_MAX_FILES || !fs_files[slot].used) return -1;
     fs_file_t* f = &fs_files[slot];
     /* Deleted-but-open slots are on their way out: no new OFD may claim one. */
@@ -447,6 +560,7 @@ int fs_slot_add_ref(int slot) {
 }
 
 void fs_slot_release(int slot) {
+    if (fat32_is_mounted()) { fat32_slot_release(slot); return; }
     if (slot < 0 || slot >= FS_MAX_FILES) return;
     fs_file_t* f = &fs_files[slot];
     if (!f->used || f->open_refs == 0) return;
@@ -459,6 +573,7 @@ void fs_slot_release(int slot) {
 }
 
 int fs_delete(const char* name) {
+    if (fat32_is_mounted()) return fat32_delete(name);
     int slot = fs_find_slot(name);
     if (slot < 0) return -1;
     fs_file_t* f = &fs_files[slot];
@@ -469,6 +584,7 @@ int fs_delete(const char* name) {
 }
 
 int fs_rename(const char* oldname, const char* newname) {
+    if (fat32_is_mounted()) return fat32_rename(oldname, newname);
     int old = fs_find_slot(oldname);
     if (old < 0) return -1;
     int same = fs_find_slot(newname);
@@ -481,6 +597,7 @@ int fs_rename(const char* oldname, const char* newname) {
 }
 
 int fs_list(void) {
+    if (fat32_is_mounted()) return fat32_list();
     terminal_putstring("Files:\n");
     for (int i = 0; i < FS_MAX_FILES; i++) {
         if (!fs_files[i].used || fs_files[i].deleted) continue;
@@ -491,4 +608,25 @@ int fs_list(void) {
         terminal_putstring(" bytes)\n");
     }
     return 0;
+}
+
+int fs_readdir(const char* path, uint32_t index, struct arc_dirent* out) {
+    if (fat32_is_mounted()) return vfs_readdir(path, index, out);
+    if (!path || !out) return -1;
+    /* ARCFS is flat: only root "/" */
+    if (!(path[0] == '/' && path[1] == '\0')) return -1;
+    uint32_t seen = 0;
+    for (int i = 0; i < FS_MAX_FILES; i++) {
+        if (!fs_files[i].used || fs_files[i].deleted) continue;
+        if (seen == index) {
+            size_t k = 0;
+            while (fs_files[i].name[k] && k < VFS_NAME_MAX - 1) { out->name[k] = fs_files[i].name[k]; k++; }
+            out->name[k] = '\0';
+            out->size = fs_files[i].size;
+            out->is_dir = 0;
+            return 0;
+        }
+        seen++;
+    }
+    return -1;
 }
