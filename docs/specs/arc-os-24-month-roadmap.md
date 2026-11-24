@@ -215,6 +215,49 @@ result is logged.
 Risks: firmware differences (UEFI-only machines, Secure Boot). Use a machine
 with Secure Boot disabled and CSM/legacy support to start.
 
+### VirtualBox hardware-compat findings (open; pick up during M3)
+
+Recorded from a VirtualBox boot test (bare ISO, no disk, 512 MB RAM, 1 CPU,
+BIOS firmware). These are open items for M3's PS/2 and `display_backend` work;
+nothing here is fixed yet, and no code changes are part of this record.
+
+1. **COM1 serial self-test reports FAILED, but serial output continues and is
+   fully readable throughout boot and shell operation.** Suspected cause: the
+   self-test uses a loopback check that VirtualBox's UART emulation does not
+   support cleanly. Investigate: inspect the self-test to confirm whether it is
+   loopback-based; compare behaviour with loopback disabled; decide whether a
+   failed self-test should stay non-fatal (current behaviour) or whether it
+   indicates a real initialization problem that merely happens not to matter
+   here. Effort: **S**.
+2. **Framebuffer / DISPI probe on VBoxVGA.** Boot logs `GFX: boot fb unsupported
+   format` and a garbage DISPI max resolution of `2867x0`, then falls back to
+   "no Bochs PCI LFB". Suspected cause: VirtualBox's VBoxVGA is not the
+   Bochs-vendor (`0x1234`) PCI device `gfx_init()` targets. Investigate for the
+   `display_backend` work: (a) handle whatever pixel format the Multiboot2
+   framebuffer tag actually provides on VBoxVGA (likely packed-pixel RGB, not
+   Bochs-specific); (b) validate DISPI max-resolution reads and reject
+   implausible values such as `height=0` instead of logging them as-is;
+   (c) add VirtualBox as a second manual test target alongside the real PC once
+   `display_backend` exists. Effort: **L**.
+3. **ATA IDENTIFY fails against a 4 MB virtual disk under VirtualBox IDE
+   emulation** (`ATA: IDENTIFY failed`), with no clean "no disk" vs "disk too
+   small" distinction. Suspected cause: either a timing/compat quirk in VBox
+   IDE emulation or an unhandled driver edge case (very small disk or unusual
+   IDENTIFY response format). Investigate once M4/M3 storage work is exercised
+   on VirtualBox: capture the IDENTIFY response and compare against QEMU and a
+   normal-sized disk. Low priority — this disk was attached incidentally and
+   was not the test target. Effort: **M**.
+4. **PS/2 keyboard input through VirtualBox produces garbled/extra characters
+   in both the VGA console and the serial echo** (typing `help` renders as
+   `8 h 6help`), while the underlying command is still parsed and executed
+   correctly afterwards. Suspected cause: a scancode-set mismatch between
+   VirtualBox's default PS/2 emulation and the driver's assumption, or missing
+   handling for extended/unrecognized scancodes that should be silently
+   discarded rather than echoed as printable characters. Investigate during
+   M3's PS/2 work: log raw scancodes, compare sets, discard unrecognized
+   scancodes, and check whether the same behaviour occurs on real hardware or
+   is VirtualBox-specific. Effort: **M**.
+
 ## M4: Persistent storage
 
 Goal: files survive reboot.
