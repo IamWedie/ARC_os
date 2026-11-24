@@ -323,3 +323,40 @@ Make the same kernel boot and show the desktop on physical PCs. Add Multiboot2 f
 - `tools/make_usb_image.py` builds GRUB multiboot2 ISO/USB image; flashing docs included.
 - Tests: `tests/test_bootinfo.c` (31 checks) wired into `tests/run_tests.bat` (14/14). `tests/boot_test_mb2.{py,bat}` added.
 - Real-hardware execution deferred in this env; checklist recorded in `tasks/hardware-log.md`.
+
+
+---
+
+## Active Milestone: M4 — Persistent storage (2026-11-23)
+
+**Spec:** `docs/specs/arc-os-24-month-roadmap.md` §M4. Prereq M3 complete.
+
+### Strategy
+
+Implement incrementally, keeping existing FS/fd/syscall behavior working until VFS/FAT32 path is green. Prioritize QEMU-persistent FAT32 on ATA PIO via block layer; add AHCI/real-hw as best-effort with clear logs.
+
+### Slices
+
+1. **PCI + block layer**: `kernel/pci.c` enumeration; `kernel/blockdev.c` with read/write/flush + write-through cache; wrap ATA PIO as blockdev.
+2. **Partition + FAT32 read**: MBR/GPT read-only parse; FAT32 BPB/FAT/dir traversal, short+LFN read.
+3. **FAT32 write + VFS**: create/write/truncate/delete/mkdir/rename; VFS mount/path/node interface; RAM-FS adapter; fd layer unchanged.
+4. **Syscalls + ABI doc**: SYS_STAT/READDIR/MKDIR/UNLINK/MOUNT (17+), `docs/specs/syscall-abi.md`.
+5. **Persistence gate + fsck**: `tests/boot_test_persist.bat` create/reboot/read-back; `tools/fsck_arc.py` or FAT32 check tool; crash-safety ordered metadata writes.
+6. **AHCI/boot-from-disk**: AHCI detect/init/DMA read/write best-effort; boot/load app from disk where feasible, keep recovery embedded shell.
+
+### Risks
+
+| Risk | Mitigation |
+|------|------------|
+| FAT32 write corruption | Write-through, ordered metadata, host image fuzz tests, fsck tool |
+| AHCI complexity | Keep ATA PIO baseline; AHCI best-effort behind block interface |
+| VFS regressions | Keep fd layer API stable; existing fs selftest/gates must pass |
+| Real hardware unavailable | Document in hardware-log; QEMU persistence gate required |
+
+### Results (2026-11-23, in-progress M4 slice on `m4-persistent-storage`)
+
+- **Implemented**: PCI enumeration, blockdev (write-through cache), ATA PIO wrapped as blockdev, MBR/GPT read-only partition probe, FAT32 mount/read/write/mkdir/readdir/stat/rename/unlink with SFN+LFN, VFS mount/dispatch, syscalls 17-21 (`SYS_STAT/READDIR/MKDIR/UNLINK/MOUNT`), `docs/specs/syscall-abi.md`, FAT32 auto-mount in `fs_init`, ARCFS fallback retained, AHCI controller detection/logging (best-effort; no DMA engine yet), `tools/fsck_fat32.py`, host FAT32 fuzz/corrupt tests, `tests/boot_test_persist.bat`.
+- **Boot-from-disk (feasible)**: FS ops dispatch to FAT32 when mounted; `exec_install_programs` installs `hello.bin` into mounted FS; recovery path remains ARCFS RAM when no disk.
+- **Crash-safety**: write-through blockdev + basic metadata update ordering; no full journaling/transaction log. `fsck_fat32.py` provides basic offline consistency checks.
+- **Gates (verified)**: `python tools\build_kernel.py --quiet` PASS; `cmd /c tests\run_tests.bat` PASS (15 suites, 0 failures, FAT32 65/65); `cmd /c tests\run_all.bat` PASS; `boot_test_gui/fork/exec/mb2/persist` PASS. Persist gate confirms FAT32 mount, file create, reboot, read-back.
+- **Deferred/limitations**: full AHCI DMA read/write; full crash-safety journaling; real hardware verification (documented in `tasks/hardware-log.md`). Integration/commit requires explicit user choice.

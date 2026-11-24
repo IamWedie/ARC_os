@@ -297,6 +297,15 @@ the test exercises the real driver without losing bytes. Manual interactive use
 can still use `-nographic`; human typing never fills the FIFO fast enough to hit
 that path. See [ADR-006](docs/decisions/ADR-006-serial-receive.md) for details.
 
+### Preparing a root disk
+
+ARC OS selects a boot root only from a FAT32 volume that is explicitly qualified:
+
+- Volume label is `ARCROOT`, or
+- The volume contains `/ARCROOT.MRK` in the root directory
+
+MBR and GPT disks are supported. GPT Basic Data and EFI System partitions may have their FAT32 BPB probed, but the EFI System Partition is never selected as root. If no qualifying disk is found, QEMU-prefixed-model fallback behavior is preserved for development; otherwise ARC OS mounts nothing and logs `STORAGE: no ARCROOT volume found`.
+
 ### QEMU Tips
 
 - `-nographic` — Serial console in the terminal (Ctrl+A X to quit)

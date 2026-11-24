@@ -221,6 +221,12 @@ Goal: files survive reboot.
 
 Prerequisites: M3 (a real disk to test on), PCI enumeration.
 
+Status / sub-milestones:
+
+- **M4.4 AHCI**: A-E done, F deferred. Sub-step F: **DEFERRED (optional): polling completion is the production path; revisit when GUI/IO concurrency needs it**.
+- **M4.10a Flush contract**: done.
+- **M4.10b**: next.
+
 Steps:
 
 1. PCI enumeration module (`kernel/pci.c`): scan buses, record vendor, device,

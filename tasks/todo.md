@@ -29,16 +29,24 @@
 - [x] M2 interaction gate: mouse move/click/window appear/drag/close/dock hover
 - [x] All M2 gates green, commit, review, merge/tag
 
-## Current: M3 — Real-hardware boot path
+## Done: M3 — Real-hardware boot path
 
-- [x] Step 1: MB2 spike in QEMU (framebuffer tag type 8) - QEMU 11.x `-kernel` still boots MB1 with dual headers; MB2-only ELF rejected with PVH note. MB2 header present/valid; GRUB/real-hardware path is target.
-- [x] Step 2: Add Multiboot2 header + boot-info parser; keep Multiboot1 path working
-- [x] Step 3: display backend selection (`boot_fb` from MB1/MB2 framebuffer, `bochs_dispi` fallback); compositor uses gfx_* interface only
-- [x] Step 4: `tools/make_usb_image.py` builds bootable GRUB+kernel USB/ISO image; Rufus/dd flashing documented
-- [x] Step 5: On-screen early debug log region + panic screen (registers, stack trace) without serial
-- [x] Step 6: Harden PMM/memory-map parsing for real firmware maps (holes, reserved, ACPI/NVS, >4GiB, overlaps, unsorted)
-- [x] Step 7: Real-hardware checklist/log in `tasks/hardware-log.md` (execution deferred: no physical hardware in env)
-- [x] Host tests: MB2 parser/memory-map normalization hardening (`tests/test_bootinfo.c`, 31 checks)
-- [x] QEMU gate: `tests/boot_test_mb2.bat` (MB2 header + normalized boot path)
-- [x] Existing gates green: run_tests, build --quiet NO-SSE, run_all, boot_test_gui/fork/exec/mb2
-- [x] M3 commit(s) and milestone closeout
+- [x] MB2+MB1 headers/parser, normalized bootinfo, boot_fb+bochs_dispi fallback, PMM hardening, on-screen debug/panic, USB image builder, boot_test_mb2, host bootinfo tests. Gates green. Integrated to main, tagged `m3`.
+
+## Current: M4 — Persistent storage
+
+- [x] M4.1 PCI enumeration (`kernel/pci.c`): scan buses, record vendor/device/class/BARs/IRQ
+- [x] M4.2 Block layer (`kernel/blockdev.c`): read/write/flush, small write-through block cache
+- [x] M4.3 Wrap existing ATA PIO in block interface; keep as QEMU baseline
+- [~] M4.4 AHCI driver (`kernel/ahci.c`): controller detection/BAR5/IRQ logging (best-effort); full DMA command engine deferred, ATA PIO baseline remains
+- [x] M4.5 Partition tables: MBR/GPT parsing (read-only)
+- [x] M4.6 FAT32: read, write, directories, SFN + LFN read/write
+- [x] M4.7 VFS: mount table, path resolution, vfs ops dispatch; ARCFS and FAT32 plug in; fd layer unchanged
+- [x] M4.8 Syscalls 17+: SYS_STAT, SYS_READDIR, SYS_MKDIR, SYS_UNLINK, SYS_MOUNT; documented in `docs/specs/syscall-abi.md`
+- [x] M4.9 Boot/load first user app from disk feasible: FAT32-backed FS dispatch + embedded hello.bin installed to mounted FS; ARCFS RAM recovery path retained when no disk
+- [~] M4.10 Crash-safety basics: write-through blockdev, basic metadata ordering in FAT32 paths, fsck-like tool `tools/fsck_fat32.py`; full journaling/ordered-write guarantees deferred
+- [x] Host tests: FAT32 parser/ops/LFN/corrupt/fuzz on in-memory image (65 checks pass)
+- [x] QEMU gate: `tests/boot_test_persist.bat` - create file, reboot, read back
+- [x] Real PC: documented in hardware-log (deferred if no hardware)
+- [x] Required gates green: `build_kernel.py --quiet`, `run_tests.bat` (15 suites), `run_all.bat`, `boot_test_gui/fork/exec/mb2/persist`
+- [ ] M4 commit/integration (requires explicit user choice)
