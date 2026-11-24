@@ -8,8 +8,8 @@ host-testable user-memory boundary and routes only `SYS_READ` and `SYS_WRITE`
 through it. No other syscall, syscall number, ABI definition, filesystem
 behavior, or user-visible normal-build behavior changes in this slice.
 
-`tasks/M0.5-kernel-safety.md` does not exist in this checkout and is not created
-or assumed. `docs/plan.md` remains untracked in the original checkout and is not
+`tasks/M0.5-kernel-safety.md` now exists at that path and is tracked.
+`docs/plan.md` remains untracked in the original checkout and is not
 staged, modified, or copied into this worktree.
 
 ## Scope and constraints

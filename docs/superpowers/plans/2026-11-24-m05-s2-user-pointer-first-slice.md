@@ -13,7 +13,7 @@
 ## Global Constraints
 
 - No edits to `exec.c`, pathname syscalls, `SYS_WAIT`, syscall numbers, ABI, page-table API, PMM, filesystem, or disk images.
-- Do not create or assume `tasks/M0.5-kernel-safety.md`; it is absent.
+- `tasks/M0.5-kernel-safety.md` now exists at that path and is tracked.
 - Do not stage, modify, move, or commit `docs/plan.md`; it stays untracked in the original checkout.
 - Do not weaken, skip, delete, or change the meaning of any existing test or gate.
 - No commit, push, merge, tag, or publish without separate approval.
