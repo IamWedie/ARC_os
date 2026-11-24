@@ -68,7 +68,7 @@ void vmm_init(void) {
     for (uint32_t i = 0; i < n; i++) {
         struct pmm_region r = pmm_region_get(i);
         uint64_t claimed_end = r.base + r.len;
-        uint64_t start = (r.base + 0x1FFFFF) & ~0x1FFFFFULL; /* round up */
+        uint64_t start = r.base & ~0x1FFFFFULL; /* round down */
         /* Iterate over each 2 MiB page that overlaps the claimed range;
          * the last page may only partially overlap (region ends at a
          * non-2 MiB boundary), but identity-mapping the whole page of real

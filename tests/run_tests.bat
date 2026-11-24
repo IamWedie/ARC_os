@@ -175,4 +175,13 @@ echo [19/19] Building and running user-access boundary test...
 if errorlevel 1 exit /b 1
 
 tests\test_user_access.exe
+if errorlevel 1 exit /b 1
+
+echo [20/20] Building and running identity-map coverage test...
+"%GCC%" -O2 -Wall -Wextra -std=gnu11 -I kernel ^
+    tests\test_identity_map.c kernel\pmm.c ^
+    -o tests\test_identity_map.exe
+if errorlevel 1 exit /b 1
+
+tests\test_identity_map.exe
 exit /b %errorlevel%

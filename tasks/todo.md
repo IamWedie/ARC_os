@@ -1,5 +1,9 @@
 # TODO
 
+## Open findings: M0.5 §2 kernel safety
+
+- [ ] kernel/vmm.c:51 PDE address mask (0xFFE00000) drops physical address bits >= 32, aliasing any 2 MiB-aligned PA at or above 4 GiB to the wrong physical page. PMM can allocate up to 16 GiB (kernel/pmm.c:13). Confirmed via real captured QEMU map entry 6 (reserved, base >= 4 GiB). Needs its own design note and fix; out of scope for the current identity-map-start task.
+
 ## Current: M1 — 1080p framebuffer, font, double buffering
 
 - [x] M1 design note + DISPI/MMIO spike confirmation (ADR-007, risk-log)
