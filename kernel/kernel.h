@@ -797,6 +797,15 @@ void ata_irq_handler(void);
 void ata_irq_stub(void);
 
 /* Userspace */
+/* Bounded user-memory boundary (kernel/user_access.c). All helpers use the
+ * current process's page tables; 0/-1 means the range was not accessible. */
+int user_range_readable(const void* user_src, size_t len);
+int user_range_writable(void* user_dst, size_t len);
+int copy_from_user(void* dst, const void* user_src, size_t len);
+int copy_to_user(void* user_dst, const void* src, size_t len);
+/* Returns string length excluding NUL, or -1 on invalid/unterminated input. */
+int copy_user_string(const void* user_src, char* dst, size_t cap);
+
 long syscall_dispatch(uint64_t n, uint64_t a1, uint64_t a2, uint64_t a3);
 /* Fork/wait syscall bodies (kernel/fork.c). sys_fork consumes the frame
  * published by syscall_stub through syscall_frame_rsp. */

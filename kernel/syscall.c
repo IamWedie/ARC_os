@@ -25,28 +25,71 @@ long syscall_dispatch(uint64_t n, uint64_t a1, uint64_t a2, uint64_t a3) {
     int pid = current_process;
 
     switch (n) {
-    case SYS_WRITE:
-        return fd_write(pid, (int)a1, (const void*)a2, (size_t)a3);
+    case SYS_WRITE: {
+        size_t count = (size_t)a3;
+        uint64_t va = a2;
+        /* A zero-length write must not dereference the user pointer. */
+        if (count == 0) return 0;
+        if (count > UINT64_MAX - va) return -1;
+        if (user_range_readable((const void*)(uintptr_t)va, count) != 0)
+            return -1;
+
+        uint8_t bounce[512];
+        size_t done = 0;
+        while (done < count) {
+            size_t chunk = count - done;
+            if (chunk > sizeof(bounce)) chunk = sizeof(bounce);
+            if (copy_from_user(bounce,
+                               (const void*)(uintptr_t)(va + done),
+                               chunk) != 0) return -1;
+
+            int wrote = fd_write(pid, (int)a1, bounce, chunk);
+            if (wrote < 0) return -1;
+            done += (size_t)wrote;
+            if ((size_t)wrote < chunk) break;
+        }
+        return (long)done;
+    }
     case SYS_READ: {
         int fd = (int)a1;
         size_t count = (size_t)a3;
+        uint64_t va = a2;
         /* A zero-length read must never block, even on console stdin. */
         if (count == 0) return 0;
-        long ret = fd_read(pid, fd, (void*)a2, count);
-        /*
-         * fd_read() stays non-blocking so the hosted tests can link fd.c
-         * directly. Console stdin is the one blocking stream: at the kernel
-         * syscall boundary, park with sti; hlt until a byte is available.
-         * Only a real console-in descriptor retries -- an empty regular file
-         * (including a closed-and-reused fd 0) returns 0 immediately.
-         */
-        if (ret == 0 && fd_is_console_in(pid, fd)) {
-            do {
-                __asm__ volatile("sti; hlt");
-                ret = fd_read(pid, fd, (void*)a2, count);
-            } while (ret == 0 && fd_is_console_in(pid, fd));
+        if (count > UINT64_MAX - va) return -1;
+        if (user_range_writable((void*)(uintptr_t)va, count) != 0)
+            return -1;
+
+        uint8_t bounce[512];
+        size_t done = 0;
+        while (done < count) {
+            size_t chunk = count - done;
+            if (chunk > sizeof(bounce)) chunk = sizeof(bounce);
+
+            int ret = fd_read(pid, fd, bounce, chunk);
+            /*
+             * fd_read() stays non-blocking so the hosted tests can link fd.c
+             * directly. Console stdin is the one blocking stream: at the
+             * kernel syscall boundary, park with sti; hlt until a byte is
+             * available. Only a real console-in descriptor retries -- an
+             * empty regular file (including a closed-and-reused fd 0)
+             * returns 0 immediately.
+             */
+            if (ret == 0 && fd_is_console_in(pid, fd)) {
+                do {
+                    __asm__ volatile("sti; hlt");
+                    ret = fd_read(pid, fd, bounce, chunk);
+                } while (ret == 0 && fd_is_console_in(pid, fd));
+            }
+            if (ret < 0) return -1;
+            if (ret == 0) break;
+
+            if (copy_to_user((void*)(uintptr_t)(va + done), bounce,
+                             (size_t)ret) != 0) return -1;
+            done += (size_t)ret;
+            if ((size_t)ret < chunk) break;
         }
-        return ret;
+        return (long)done;
     }
     case SYS_EXIT:  syscall_exit((int)a1); return 0;
     case SYS_OPEN:

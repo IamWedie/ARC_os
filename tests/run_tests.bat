@@ -77,6 +77,7 @@ echo [10/11] Building and running fork/wait test against real kernel sources...
     tests\test_fork_wait.c tests\fork_wait_stub.c ^
     kernel\scheduler.c kernel\fd.c kernel\address_space.c ^
     kernel\pagetable.c kernel\fork.c kernel\syscall.c kernel\exec.c ^
+    kernel\user_access.c ^
     -o tests\test_fork_wait.exe
 if errorlevel 1 exit /b 1
 
@@ -88,6 +89,7 @@ echo [11/11] Building and running exec-loader test against real kernel sources..
     tests\test_exec.c tests\exec_stub.c ^
     kernel\scheduler.c kernel\address_space.c kernel\pagetable.c ^
     kernel\exec.c kernel\fd.c kernel\syscall.c kernel\fork.c ^
+    kernel\user_access.c ^
     -o tests\test_exec.exe
 if errorlevel 1 exit /b 1
 
@@ -163,4 +165,14 @@ echo [18/18] Building and running storage boot policy host test...
 if errorlevel 1 exit /b 1
 
 tests\test_storage_policy.exe
+if errorlevel 1 exit /b 1
+
+echo [19/19] Building and running user-access boundary test...
+"%GCC%" -O2 -Wall -Wextra -std=gnu11 -I kernel ^
+    tests\test_user_access.c tests\pt_stub.c ^
+    kernel\user_access.c kernel\pagetable.c ^
+    -o tests\test_user_access.exe
+if errorlevel 1 exit /b 1
+
+tests\test_user_access.exe
 exit /b %errorlevel%

@@ -83,6 +83,27 @@ static void print_prompt(void) {
     syscall4(SYS_WRITE, 1, (long)"arc> ", 5);
 }
 
+#ifdef ARC_SYSCALL_TEST
+/* Test-only integer printer; the normal shell image cannot reach this code. */
+static void print_test_long(long value) {
+    char buf[24];
+    int pos = (int)sizeof(buf);
+    unsigned long magnitude = value < 0
+        ? (unsigned long)(-(value + 1)) + 1UL
+        : (unsigned long)value;
+
+    buf[--pos] = '\0';
+    if (magnitude == 0) buf[--pos] = '0';
+    while (magnitude) {
+        buf[--pos] = (char)('0' + (magnitude % 10UL));
+        magnitude /= 10UL;
+    }
+    if (value < 0) buf[--pos] = '-';
+    syscall4(SYS_WRITE, STDOUT, (long)&buf[pos],
+             (long)(sizeof(buf) - (unsigned long)pos - 1UL));
+}
+#endif
+
 static void run_command(const char* cmd) {
     char tok[80];
 
@@ -399,6 +420,28 @@ static void run_command(const char* cmd) {
         print_newline();
         return;
     }
+
+#ifdef ARC_SYSCALL_TEST
+    if (starts_with(cmd, "ptrtest")) {
+        /* Deliberately pass a kernel address as a user buffer. The gate checks
+         * that both syscalls reject it and that this shell keeps running. */
+        void* kernel_va = (void*)0x200000UL;
+        long written, read;
+
+        print_str("SYSCALL PTR TEST\n");
+        written = syscall4(SYS_WRITE, STDOUT, (long)kernel_va, 4);
+        print_str("write ");
+        print_test_long(written);
+        print_newline();
+
+        read = syscall4(SYS_READ, STDIN, (long)kernel_va, 4);
+        print_str("read ");
+        print_test_long(read);
+        print_newline();
+        print_str("shell alive\n");
+        return;
+    }
+#endif
 
     if (starts_with(cmd, "exit")) {
         syscall4(SYS_EXIT, 0, 0, 0);

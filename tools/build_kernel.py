@@ -179,13 +179,13 @@ HELLO_C = os.path.join(ROOT, "userspace", "hello.c")
 USER_HELLO_SOURCES = [CRT0, HELLO_C]
 
 
-def build_user_blob(zig, objcopy, name, sources):
+def build_user_blob(zig, objcopy, name, sources, extra_flags=None):
     """Build one freestanding flat binary and its objcopy symbol object."""
     user_elf = os.path.join(BUILD, name + ".elf")
     user_bin = os.path.join(BUILD, name + ".bin")
     user_obj = os.path.join(BUILD, name + "_bin.o")
 
-    run([zig, "cc"] + USER_FLAGS + [
+    run([zig, "cc"] + USER_FLAGS + (extra_flags or []) + [
         "-nostdlib",
         "-Wl,-T," + os.path.join(ROOT, "userspace", "link.ld"),
         "-Wl,-e,_start",
@@ -210,7 +210,10 @@ def build_user_blob(zig, objcopy, name, sources):
 
 
 def build_user_shell(zig, objcopy):
-    return build_user_blob(zig, objcopy, "user_shell", [CRT0, SHELL_C])
+    extra = []
+    if os.environ.get("ARC_SYSCALL_TEST") == "1":
+        extra.append("-DARC_SYSCALL_TEST")
+    return build_user_blob(zig, objcopy, "user_shell", [CRT0, SHELL_C], extra)
 
 
 def build_user_hello(zig, objcopy):
