@@ -3,6 +3,8 @@
 ## Open findings: M0.5 §2 kernel safety
 
 - [ ] kernel/vmm.c:51 PDE address mask (0xFFE00000) drops physical address bits >= 32, aliasing any 2 MiB-aligned PA at or above 4 GiB to the wrong physical page. PMM can allocate up to 16 GiB (kernel/pmm.c:13). Confirmed via real captured QEMU map entry 6 (reserved, base >= 4 GiB). Needs its own design note and fix; out of scope for the current identity-map-start task.
+- [ ] The readok QEMU gate proves copy_to_user() with length > 1, but the 8-byte stack buffer does not straddle a page boundary in observed runs, so ua_validate's cross-page loop iteration is not deterministically exercised by this gate.
+- [ ] The readok hook's short-read loop (for when the UART ring returns fewer bytes than requested) is implemented but has not been exercised in any observed run -- every run so far returned the full 6 bytes in one copy_to_user() call.
 
 ## Current: M1 — 1080p framebuffer, font, double buffering
 
