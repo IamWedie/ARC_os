@@ -20,10 +20,15 @@ static uint64_t ua_current_root(void) {
     return processes[current_process].pml4_phys;
 }
 
-static int ua_entry_ok(uint64_t entry, int write) {
+/*
+ * Bit 7 is PS in PML4E/PDPTE/PDE (where large/huge pages are supported) and
+ * PAT in a final 4 KiB PTE. Reject PS above the leaf because this walk needs
+ * a 4 KiB address; ignore PAT at the leaf because it only selects caching.
+ */
+static int ua_entry_ok(uint64_t entry, int write, int is_pte) {
     uint64_t required = PT_PG_PRESENT | PT_PG_USER;
     if ((entry & required) != required) return -1;
-    if (entry & PT_PG_PSE) return -1;
+    if (!is_pte && (entry & PT_PG_PSE)) return -1;
     if (write && !(entry & PT_PG_RW)) return -1;
     return 0;
 }
@@ -38,19 +43,19 @@ static uint64_t* ua_walk(uint64_t root_phys, uint64_t page_va, int write) {
 
     uint64_t* table = (uint64_t*)(uintptr_t)root_phys;
     uint64_t entry = table[(page_va >> 39) & 0x1FF];
-    if (ua_entry_ok(entry, write) != 0) return NULL;
+    if (ua_entry_ok(entry, write, 0) != 0) return NULL;
 
     table = (uint64_t*)(uintptr_t)(entry & UA_ADDR_MASK);
     entry = table[(page_va >> 30) & 0x1FF];
-    if (ua_entry_ok(entry, write) != 0) return NULL;
+    if (ua_entry_ok(entry, write, 0) != 0) return NULL;
 
     table = (uint64_t*)(uintptr_t)(entry & UA_ADDR_MASK);
     entry = table[(page_va >> 21) & 0x1FF];
-    if (ua_entry_ok(entry, write) != 0) return NULL;
+    if (ua_entry_ok(entry, write, 0) != 0) return NULL;
 
     table = (uint64_t*)(uintptr_t)(entry & UA_ADDR_MASK);
     entry = table[(page_va >> 12) & 0x1FF];
-    if (ua_entry_ok(entry, write) != 0) return NULL;
+    if (ua_entry_ok(entry, write, 1) != 0) return NULL;
 
     return &table[(page_va >> 12) & 0x1FF];
 }

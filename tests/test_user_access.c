@@ -28,12 +28,22 @@ volatile int current_process;
 #define USER_UNTERMINATED_VA 0x0000009000001000ULL /* filled with non-NUL bytes */
 #define USER_STRING_VA       0x0000009000002000ULL /* NUL-terminated string */
 #define USER_WRITE_VA        0x0000009000003000ULL /* RW user write target */
+#define USER_PAT_VA          0x0000010000000000ULL /* PML4 slot 2, PAT leaf */
+#define USER_LARGE_PDE_VA    0x0000020000000000ULL /* PML4 slot 4, PS in PDE */
+#define USER_LARGE_PDPTE_VA  0x0000040000000000ULL /* PML4 slot 8, PS in PDPTE */
+#define USER_LARGE_PML4E_VA  0x0000080000000000ULL /* PML4 slot 16, PS in PML4E */
+
+/* Bit 7 is PAT in a 4 KiB PTE and PS in the levels above it. */
+#define UA_TEST_PAT          (1ULL << 7)
+#define UA_TEST_ADDR_MASK    0x000FFFFFFFFFF000ULL
 
 static uint8_t user_good[4096] __attribute__((aligned(4096)));
 static uint8_t user_ro[4096] __attribute__((aligned(4096)));
 static uint8_t user_unterminated[4096] __attribute__((aligned(4096)));
 static uint8_t user_string[4096] __attribute__((aligned(4096)));
 static uint8_t user_write[4096] __attribute__((aligned(4096)));
+static uint8_t user_pat_page[4096] __attribute__((aligned(4096)));
+static uint8_t user_large_page[4096] __attribute__((aligned(4096)));
 static uint8_t kernel_page[4096] __attribute__((aligned(4096)));
 
 static int tests_passed;
@@ -67,6 +77,24 @@ static int all_bytes(const void* buf, size_t len, uint8_t value) {
     return 1;
 }
 
+/* Test-only access to one real table entry; shifts mirror the production walk. */
+static uint64_t* ua_test_entry(uint64_t* root, uint64_t va, int shift) {
+    uint64_t* table = root;
+    if (shift < 39) {
+        uint64_t e = table[(va >> 39) & 0x1FF];
+        table = (uint64_t*)(uintptr_t)(e & UA_TEST_ADDR_MASK);
+    }
+    if (shift < 30) {
+        uint64_t e = table[(va >> 30) & 0x1FF];
+        table = (uint64_t*)(uintptr_t)(e & UA_TEST_ADDR_MASK);
+    }
+    if (shift < 21) {
+        uint64_t e = table[(va >> 21) & 0x1FF];
+        table = (uint64_t*)(uintptr_t)(e & UA_TEST_ADDR_MASK);
+    }
+    return &table[(va >> shift) & 0x1FF];
+}
+
 static void setup_world(void) {
     pt_stub_reset();
     memset(processes, 0, sizeof(processes));
@@ -85,6 +113,12 @@ static void setup_world(void) {
     memcpy(user_string, "abc", 3);
 
     memset(user_write, 0, sizeof(user_write));
+
+    memset(user_pat_page, 0, sizeof(user_pat_page));
+    for (size_t i = 0; i < 16; i++) user_pat_page[i] = (uint8_t)(0xC0 + i);
+
+    memset(user_large_page, 0, sizeof(user_large_page));
+    for (size_t i = 0; i < 16; i++) user_large_page[i] = (uint8_t)(0xD0 + i);
 
     uint64_t* root = pt_stub_root();
     processes[0].pml4_phys = page_phys(root);
@@ -109,6 +143,18 @@ static void setup_world(void) {
     CHECK(pt_map(root, KERNEL_TEST_VA, page_phys(kernel_page),
                  PT_PG_RW, &pt_stub_ops) == 0,
           "setup: kernel slot page map failed");
+    CHECK(pt_map(root, USER_PAT_VA, page_phys(user_pat_page),
+                 PT_PG_USER | PT_PG_RW, &pt_stub_ops) == 0,
+          "setup: PAT leaf page map failed");
+    CHECK(pt_map(root, USER_LARGE_PDE_VA, page_phys(user_large_page),
+                 PT_PG_USER | PT_PG_RW, &pt_stub_ops) == 0,
+          "setup: PDE PS control page map failed");
+    CHECK(pt_map(root, USER_LARGE_PDPTE_VA, page_phys(user_large_page),
+                 PT_PG_USER | PT_PG_RW, &pt_stub_ops) == 0,
+          "setup: PDPTE PS control page map failed");
+    CHECK(pt_map(root, USER_LARGE_PML4E_VA, page_phys(user_large_page),
+                 PT_PG_USER | PT_PG_RW, &pt_stub_ops) == 0,
+          "setup: PML4E PS control page map failed");
 }
 
 static void test_valid_copy(void) {
@@ -201,6 +247,58 @@ static void test_user_string(void) {
           "unterminated string changed destination");
 }
 
+static void check_large_entry_rejected(uint64_t* root, uint64_t va,
+                                       int shift, const char* label) {
+    uint8_t kernel_buf[16];
+    uint64_t* entry = ua_test_entry(root, va, shift);
+
+    /* Control: the same table is a valid 4 KiB mapping before PS is set. */
+    fill_sentinel(kernel_buf, sizeof(kernel_buf));
+    CHECK(user_range_readable((const void*)va, 8) == 0,
+          "%s control before PS was rejected", label);
+    CHECK(copy_from_user(kernel_buf, (const void*)va, 8) == 0,
+          "%s control copy failed", label);
+    CHECK(memcmp(kernel_buf, user_large_page, 8) == 0,
+          "%s control bytes differ", label);
+
+    /* With PS set, the only changed bit is the large-page marker. */
+    *entry |= UA_TEST_PAT;
+
+    fill_sentinel(kernel_buf, sizeof(kernel_buf));
+    CHECK(user_range_readable((const void*)va, 8) == -1,
+          "%s PS entry accepted", label);
+    CHECK(copy_from_user(kernel_buf, (const void*)va, 8) == -1,
+          "%s PS copy accepted", label);
+    CHECK(all_bytes(kernel_buf, sizeof(kernel_buf), 0x5A),
+          "%s PS copy changed destination", label);
+}
+
+static void test_bit7_interpretation(void) {
+    printf("\n=== Test 6: bit 7 PSE/PAT interpretation ===\n");
+    uint64_t* root = pt_stub_root();
+    uint8_t kernel_buf[16];
+
+    /* Bit 7 in the final PTE is PAT, not a large-page marker. */
+    uint64_t* pat_leaf = ua_test_entry(root, USER_PAT_VA, 12);
+    *pat_leaf |= UA_TEST_PAT;
+
+    CHECK(user_range_readable((const void*)USER_PAT_VA, 8) == 0,
+          "PAT-enabled 4 KiB PTE rejected");
+    fill_sentinel(kernel_buf, sizeof(kernel_buf));
+    CHECK(copy_from_user(kernel_buf, (const void*)USER_PAT_VA, 8) == 0,
+          "PAT-enabled 4 KiB copy failed");
+    CHECK(memcmp(kernel_buf, user_pat_page, 8) == 0,
+          "PAT-enabled 4 KiB copy bytes differ");
+    CHECK(copy_to_user((void*)USER_PAT_VA, "pat", 3) == 0,
+          "PAT-enabled 4 KiB write rejected");
+    CHECK(memcmp(user_pat_page, "pat", 3) == 0,
+          "PAT-enabled 4 KiB write bytes differ");
+
+    check_large_entry_rejected(root, USER_LARGE_PDE_VA, 21, "PDE");
+    check_large_entry_rejected(root, USER_LARGE_PDPTE_VA, 30, "PDPTE");
+    check_large_entry_rejected(root, USER_LARGE_PML4E_VA, 39, "PML4E");
+}
+
 int main(void) {
     printf("ARC OS user-access boundary test\n");
     setup_world();
@@ -209,6 +307,7 @@ int main(void) {
     test_invalid_copies_do_not_touch_destination();
     test_zero_length_and_valid_write();
     test_user_string();
+    test_bit7_interpretation();
 
     printf("\nUser-access test summary: %d passed, %d failed\n",
            tests_passed, tests_failed);
