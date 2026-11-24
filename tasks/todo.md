@@ -38,15 +38,16 @@
 - [x] M4.1 PCI enumeration (`kernel/pci.c`): scan buses, record vendor/device/class/BARs/IRQ
 - [x] M4.2 Block layer (`kernel/blockdev.c`): read/write/flush, small write-through block cache
 - [x] M4.3 Wrap existing ATA PIO in block interface; keep as QEMU baseline
-- [~] M4.4 AHCI driver (`kernel/ahci.c`): controller detection/BAR5/IRQ logging (best-effort); full DMA command engine deferred, ATA PIO baseline remains
+- [x] M4.4 AHCI A-E done: controller detection/BAR5/IRQ, DMA read/write, FAT32 ARCROOT boot policy, read-only policy for non-QEMU models. Sub-step F DEFERRED (optional polling completion; production path is polling).
 - [x] M4.5 Partition tables: MBR/GPT parsing (read-only)
 - [x] M4.6 FAT32: read, write, directories, SFN + LFN read/write
 - [x] M4.7 VFS: mount table, path resolution, vfs ops dispatch; ARCFS and FAT32 plug in; fd layer unchanged
 - [x] M4.8 Syscalls 17+: SYS_STAT, SYS_READDIR, SYS_MKDIR, SYS_UNLINK, SYS_MOUNT; documented in `docs/specs/syscall-abi.md`
 - [x] M4.9 Boot/load first user app from disk feasible: FAT32-backed FS dispatch + embedded hello.bin installed to mounted FS; ARCFS RAM recovery path retained when no disk
-- [~] M4.10 Crash-safety basics: write-through blockdev, basic metadata ordering in FAT32 paths, fsck-like tool `tools/fsck_fat32.py`; full journaling/ordered-write guarantees deferred
-- [x] Host tests: FAT32 parser/ops/LFN/corrupt/fuzz on in-memory image (65 checks pass)
-- [x] QEMU gate: `tests/boot_test_persist.bat` - create file, reboot, read back
-- [x] Real PC: documented in hardware-log (deferred if no hardware)
-- [x] Required gates green: `build_kernel.py --quiet`, `run_tests.bat` (15 suites), `run_all.bat`, `boot_test_gui/fork/exec/mb2/persist`
-- [ ] M4 commit/integration (requires explicit user choice)
+- [x] M4.10a Flush contract done: syscall 22 `SYS_SYNC`, blockdev flush plumbing, durability spec; full journaling remains deferred
+- [ ] M4.10b next: durability/recovery follow-up (not started)
+- [x] Host tests: FAT32 90/90, sync 17/17, AHCI 204/204, storage policy 15/15, plus slab/scheduler/fd/fs/page/as/fork/exec/gui/bootinfo suites
+- [x] QEMU gates: `boot_test_persist`, `boot_test_persist_ahci`, `boot_test_fork`, `boot_test_exec`, `boot_test_ahci`, `boot_test_ahci_mixed`, `boot_test_ahci_readonly` all PASS
+- [~] Real-hardware/VM read-only test pending on owner hardware: VBoxManage absent here; see `docs/vm-readonly-test.md`. QEMU equivalent with `model=VBOX-LIKE-DISK` PASS and recorded in `tasks/hardware-log.md`.
+- [x] Required gates green on final commit: `run_tests.bat`, `build_kernel.py --quiet`, `run_all.bat` (QUALITY GATE PASSED)
+- [x] Commits, tags, and push done on `m4-persistent-storage`; M4.4 F and M4.10b not started

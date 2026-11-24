@@ -2,6 +2,13 @@
 
 Record real-hardware boot results here (M3 onward, per roadmap section 2 rule 5 and section 8).
 
+## VM read-only test matrix
+
+| Date | Machine/VM | Firmware mode | Disk setup | What was tested | Result | Notes |
+|------|------------|---------------|------------|-----------------|--------|-------|
+| 2026-11-24 | QEMU `qemu-system-x86_64` (Windows dev machine) | BIOS-style QEMU boot (`-kernel os.elf`) | `tools/make_arcroot_disk.py` raw MBR/FAT32 image, 32768 sectors, label `ARCROOT`, `welcome.txt`; attached to `ich9-ahci` port 0 with `model=VBOX-LIKE-DISK` | Boot, `ls`, `echo hello > ro.txt`, `sync`, SHA256 before/after disk image | PASS | Serial log: `C:\Users\wadia\AppData\Local\Temp\opencode\vmlike_qemu_serial.log`. Log showed `AHCI: version 1.0 ports=6 pi=0x0000003f s64a=1`, `AHCI: port 0 model="VBOX-LIKE-DISK" sectors=32768 lba48=1 ss=512 flush=1`, `STORAGE: root = ahci0 partition 1 (FAT32)`, `AHCI: port 0 read-only (real hardware, ARC_AHCI_WRITE_REAL not set)`, `welcome.txt (74 bytes)`, `echo: cannot create ro.txt`, `sync: 0`, no panic. SHA256 before/after `b37d3dd9faec4b453d76604969981bff23991fa6132889a9b06a76fef246e60b`. |
+| 2026-11-24 | VirtualBox (owner-run pending) | BIOS/CSM required; SATA controller set to Intel AHCI | `tools/make_arcroot_disk.py` raw image converted to VDI; attached to SATA port 0; serial port COM1 to raw file; boot from `os.iso` | Full manual procedure in `docs/vm-readonly-test.md` | PENDING, run by owner | `VBoxManage` is not installed on this machine (`where VBoxManage` returned `VBOXMANAGE_NOT_FOUND`). Do not claim a VirtualBox result until the owner runs it. |
+
 | Date | Milestone | Machine | CPU | RAM | Firmware (UEFI/Legacy) | Secure Boot | Boot media | Result | Notes / fixes |
 |------|-----------|---------|-----|-----|------------------------|-------------|------------|--------|---------------|
 | 2026-11-22 | M3 | N/A (no physical hardware in CI/dev env) | N/A | N/A | N/A | N/A | N/A | DEFERRED | QEMU gates pass (gui/fork/exec/mb2). Real-hardware boot not executed in this environment; run checklist below on target PC. |
