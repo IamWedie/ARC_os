@@ -441,6 +441,40 @@ static void run_command(const char* cmd) {
         print_str("shell alive\n");
         return;
     }
+
+    if (starts_with(cmd, "readok")) {
+        /* Positive case: a real ring-3 stack buffer handed to SYS_READ.
+         * Request the whole payload in one call so the kernel copies more
+         * than one byte through copy_to_user(); fd_read() can still return a
+         * short count when the UART ring drains in pieces, so loop only on
+         * those short returns. SYS_WRITE echoes the bytes back through
+         * copy_from_user(). */
+        char buf[8];
+        long got = 0;
+        long largest = 0;
+
+        print_str("SYSCALL READ OK TEST\n");
+        while (got < 6) {
+            long r = syscall4(SYS_READ, STDIN, (long)&buf[got], 6 - got);
+            if (r <= 0) continue;
+            if (r > largest) largest = r;
+            got += r;
+        }
+        buf[got] = '\0';
+
+        print_str("read ");
+        print_test_long(got);
+        print_newline();
+        print_str("bulk ");
+        print_test_long(largest);
+        print_newline();
+        if (largest > 1) print_str("bulk copy ok\n");
+        print_str("got ");
+        syscall4(SYS_WRITE, STDOUT, (long)buf, got);
+        print_newline();
+        print_str("shell alive\n");
+        return;
+    }
 #endif
 
     if (starts_with(cmd, "exit")) {
