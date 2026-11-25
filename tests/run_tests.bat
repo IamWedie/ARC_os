@@ -184,4 +184,14 @@ echo [20/20] Building and running identity-map coverage test...
 if errorlevel 1 exit /b 1
 
 tests\test_identity_map.exe
+if errorlevel 1 exit /b 1
+
+echo [21/21] Building and running 2 MiB PDE address-mask test...
+"%GCC%" -O2 -Wall -Wextra -std=gnu11 -I kernel ^
+    tests\test_vmm_pde_mask.c tests\pt_stub.c ^
+    kernel\pmm.c kernel\pagetable.c ^
+    -o tests\test_vmm_pde_mask.exe
+if errorlevel 1 exit /b 1
+
+tests\test_vmm_pde_mask.exe
 exit /b %errorlevel%

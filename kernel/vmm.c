@@ -48,7 +48,7 @@ static void vmm_map_2mb(uint64_t vaddr, uint64_t paddr) {
     uint64_t pdi   = (vaddr >> 21) & 0x1FF;
 
     if (pml4i != 0 || pdpti >= VMM_PD_COUNT) return; /* below 128 GiB only */
-    vmm_pd[pdpti][pdi] = (paddr & 0xFFE00000ULL) | PG_PRESENT | PG_RW | PG_PSE;
+    vmm_pd[pdpti][pdi] = (paddr & 0x000FFFFFFFE00000ULL) | PG_PRESENT | PG_RW | PG_PSE;
 }
 
 void vmm_init(void) {
