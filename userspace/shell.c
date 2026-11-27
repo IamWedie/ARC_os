@@ -20,6 +20,17 @@
 #define SYS_WAIT 15
 #define SYS_EXEC 16
 #define SYS_SYNC 22
+#ifdef ARC_RING0_FAULT_TEST
+#define SYS_RING0_FAULT_TEST 24
+#endif
+#ifdef ARC_DOUBLE_FAULT_TEST
+#define SYS_DOUBLE_FAULT_TEST 25
+#endif
+#ifdef ARC_PANIC_DIAG_TEST
+#define SYS_PANIC_UD_TEST 26
+#define SYS_PANIC_PF_TEST 27
+#define SYS_PANIC_RECURSIVE_TEST 28
+#endif
 
 /* Open flags (must match kernel.h) */
 #define O_RDONLY 0x0000
@@ -83,7 +94,7 @@ static void print_prompt(void) {
     syscall4(SYS_WRITE, 1, (long)"arc> ", 5);
 }
 
-#ifdef ARC_SYSCALL_TEST
+#if defined(ARC_SYSCALL_TEST) || defined(ARC_EXCEPTION_TEST)
 /* Test-only integer printer; the normal shell image cannot reach this code. */
 static void print_test_long(long value) {
     char buf[24];
@@ -101,6 +112,66 @@ static void print_test_long(long value) {
     if (value < 0) buf[--pos] = '-';
     syscall4(SYS_WRITE, STDOUT, (long)&buf[pos],
              (long)(sizeof(buf) - (unsigned long)pos - 1UL));
+}
+#endif
+
+#ifdef ARC_EXCEPTION_TEST
+/* Test-only ring-3 fault triggers. Each must trap into the isolation path. */
+static void trigger_user_fault(int kind) {
+    if (kind == 0) {  /* #DE: divide EDX:EAX by zero */
+        __asm__ volatile("xorl %%edx, %%edx\n"
+                         "movl $1, %%eax\n"
+                         "xorl %%ecx, %%ecx\n"
+                         "idivl %%ecx\n"
+                         : : : "rax", "rcx", "rdx", "cc");
+    } else if (kind == 1) {  /* #UD: architecturally invalid opcode */
+        __asm__ volatile("ud2" : : : "memory");
+    } else {  /* #PF: write to an unmapped canonical user address */
+        unsigned long bad = 0x00000000B00B0000UL;
+        __asm__ volatile("movq $0, (%0)" : : "r"(bad) : "memory");
+    }
+}
+
+static void run_fault_case(const char* tag, int kind, long expected_status) {
+    print_str("USERFAULT ");
+    print_str(tag);
+    print_str(" begin\n");
+
+    long pid = sys_fork();
+    if (pid == 0) {
+        print_str("USERFAULT ");
+        print_str(tag);
+        print_str(" child faulting\n");
+        trigger_user_fault(kind);
+        /* The kernel must never let the child resume here. */
+        syscall4(SYS_EXIT, 99, 0, 0);
+        return;
+    }
+
+    int status = -1;
+    long got = sys_wait(&status);
+    print_str("USERFAULT ");
+    print_str(tag);
+    print_str(" wait ");
+    print_test_long(got);
+    print_newline();
+    print_str("USERFAULT ");
+    print_str(tag);
+    print_str(" status ");
+    print_test_long(status);
+    print_newline();
+    if (got > 0 && status == expected_status) {
+        print_str("USERFAULT ");
+        print_str(tag);
+        print_str(" isolated\n");
+    } else {
+        print_str("USERFAULT ");
+        print_str(tag);
+        print_str(" bad status\n");
+    }
+    print_str("USERFAULT ");
+    print_str(tag);
+    print_str(" shell alive\n");
 }
 #endif
 
@@ -473,6 +544,55 @@ static void run_command(const char* cmd) {
         syscall4(SYS_WRITE, STDOUT, (long)buf, got);
         print_newline();
         print_str("shell alive\n");
+        return;
+    }
+#endif
+
+#ifdef ARC_RING0_FAULT_TEST
+    if (starts_with(cmd, "ring0fault")) {
+        print_str("RING0FAULT invoked from ring 3\n");
+        syscall4(SYS_RING0_FAULT_TEST, 0, 0, 0);
+        return;
+    }
+#endif
+
+#ifdef ARC_PANIC_DIAG_TEST
+    if (starts_with(cmd, "panicud")) {
+        print_str("PANICUD invoked from ring 3\n");
+        syscall4(SYS_PANIC_UD_TEST, 0, 0, 0);
+        return;
+    }
+    if (starts_with(cmd, "panicpf")) {
+        print_str("PANICPF invoked from ring 3\n");
+        syscall4(SYS_PANIC_PF_TEST, 0, 0, 0);
+        return;
+    }
+    if (starts_with(cmd, "panicrecursive")) {
+        print_str("PANICREC invoked from ring 3\n");
+        syscall4(SYS_PANIC_RECURSIVE_TEST, 0, 0, 0);
+        return;
+    }
+#endif
+
+#ifdef ARC_DOUBLE_FAULT_TEST
+    if (starts_with(cmd, "doublefault")) {
+        print_str("DOUBLEFAULT invoked from ring 3\n");
+        syscall4(SYS_DOUBLE_FAULT_TEST, 0, 0, 0);
+        return;
+    }
+#endif
+
+#ifdef ARC_EXCEPTION_TEST
+    if (starts_with(cmd, "faultde")) {
+        run_fault_case("DE", 0, 128);
+        return;
+    }
+    if (starts_with(cmd, "faultud")) {
+        run_fault_case("UD", 1, 134);
+        return;
+    }
+    if (starts_with(cmd, "faultpf")) {
+        run_fault_case("PF", 2, 142);
         return;
     }
 #endif

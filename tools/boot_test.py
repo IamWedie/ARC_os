@@ -71,12 +71,18 @@ def main():
                         metavar="TEXT",
                         help="text that must not appear anywhere in the serial "
                              "output (repeatable)")
+    parser.add_argument("--expect-max", action="append", default=[],
+                        nargs=2, metavar=("TEXT", "MAX"),
+                        help="TEXT must appear at most MAX times (repeatable)")
     parser.add_argument("--input", action="append", default=[],
                         help="line sent to the guest once the shell prompt "
                              "appears (repeatable)")
     parser.add_argument("--settle", type=float, default=0.0,
                         help="seconds to keep the guest running after all "
                              "markers have appeared")
+    parser.add_argument("--allow-fatal", action="store_true",
+                        help="do not fail on panic/fault markers; only for "
+                             "deliberate crashing-kernel gates")
     args = parser.parse_args()
 
     if not os.path.isfile(OS_ELF):
@@ -163,7 +169,8 @@ def main():
     next_input_at = 0.0
     while time.time() < deadline:
         text = output()
-        fatal = next((m for m in FATAL_MARKERS if m in text), None)
+        fatal = (None if args.allow_fatal else
+                 next((m for m in FATAL_MARKERS if m in text), None))
         if fatal:
             break
 
@@ -187,7 +194,8 @@ def main():
 
     time.sleep(0.2)
     text = output()
-    fatal = next((m for m in FATAL_MARKERS if m in text), None)
+    fatal = (None if args.allow_fatal else
+             next((m for m in FATAL_MARKERS if m in text), None))
 
     try:
         sock.shutdown(socket.SHUT_RDWR)
@@ -202,7 +210,8 @@ def main():
             proc.kill()
     reader.join(timeout=2)
     text = output()
-    fatal = next((m for m in FATAL_MARKERS if m in text), None)
+    fatal = (None if args.allow_fatal else
+             next((m for m in FATAL_MARKERS if m in text), None))
 
     print("--- serial console ---")
     print(text, end="" if text.endswith("\n") else "\n")
@@ -215,12 +224,26 @@ def main():
 
     missing = [m for m in markers if m not in text]
     forbidden = [m for m in args.expect_not if m in text]
+    exceeded = []
+    for needle, raw_limit in args.expect_max:
+        try:
+            limit = int(raw_limit)
+        except ValueError:
+            raise SystemExit("--expect-max limit must be an integer: %s"
+                             % raw_limit)
+        actual = text.count(needle)
+        if actual > limit:
+            exceeded.append("%s (%d > %d)" % (needle, actual, limit))
     if fatal:
         print("BOOT FAILED: fatal marker %r" % fatal, file=sys.stderr)
         return 1
     if forbidden:
         print("BOOT FAILED: forbidden marker(s) present: %s"
               % ", ".join(map(repr, forbidden)), file=sys.stderr)
+        return 1
+    if exceeded:
+        print("BOOT FAILED: marker count limit(s) exceeded: %s"
+              % ", ".join(exceeded), file=sys.stderr)
         return 1
     if missing:
         print("BOOT FAILED: missing markers: %s"

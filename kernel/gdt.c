@@ -34,6 +34,36 @@ struct gdt_entry gdt[GDT_ENTRIES];
 struct gdt_ptr gdt_ptr_data;
 struct tss_t tss;
 
+/*
+ * Dedicated ring-0 stack for #DF (vector 8). It is static kernel memory with
+ * its own compile-time bounds: it is never allocated from the PMM, never
+ * attached to a process, and never used as the privilege-transition RSP0.
+ */
+static uint8_t double_fault_stack[DOUBLE_FAULT_STACK_SIZE]
+    __attribute__((aligned(4096)));
+
+uint64_t double_fault_stack_base(void) {
+    return (uint64_t)(uintptr_t)double_fault_stack;
+}
+
+uint64_t double_fault_stack_top(void) {
+    return double_fault_stack_base() + DOUBLE_FAULT_STACK_SIZE;
+}
+
+uint64_t tss_ist1_top(void) {
+    return tss.ist[DOUBLE_FAULT_IST_INDEX - 1];
+}
+
+int frame_on_double_fault_stack(uint64_t frame_rsp) {
+    uint64_t base = double_fault_stack_base();
+    return frame_rsp >= base && frame_rsp < double_fault_stack_top();
+}
+
+void double_fault_ist_init(void) {
+    /* IST entries are 1-based in the IDT; the TSS array is 0-based. */
+    tss.ist[DOUBLE_FAULT_IST_INDEX - 1] = double_fault_stack_top();
+}
+
 void set_tss_rsp0(uint64_t rsp) {
     tss.rsp0 = rsp;
 }
@@ -72,6 +102,8 @@ void gdt_init(void) {
     /* No I/O permission bitmap: point past the TSS limit. */
     tss.iomap_base = sizeof(struct tss_t);
     tss.rsp0 = 0;
+    /* The #DF IST stack is live before any IDT gate can select it. */
+    double_fault_ist_init();
     gdt_set_tss((uint64_t)&tss);
 
     __asm__ volatile(

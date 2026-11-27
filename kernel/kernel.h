@@ -167,8 +167,15 @@ void* kmem_cache_alloc(struct kmem_cache* cache);
 void kmem_cache_free(struct kmem_cache* cache, void* ptr);
 
 /* IDT */
+#define DOUBLE_FAULT_VECTOR 8
+#define DOUBLE_FAULT_IST_INDEX 1
 void idt_init(void);
 void idt_set_gate(uint8_t num, uint64_t base, uint16_t sel, uint8_t flags);
+void idt_set_exception_gate(uint8_t num, uint64_t base);
+uint8_t idt_gate_ist(uint8_t num);
+uint16_t idt_gate_selector(uint8_t num);
+uint8_t idt_gate_flags(uint8_t num);
+uint64_t idt_gate_offset(uint8_t num);
 
 /* GDT / TSS */
 #define GDTSEL_KC 0x08    /* kernel code, ring 0 */
@@ -176,8 +183,14 @@ void idt_set_gate(uint8_t num, uint64_t base, uint16_t sel, uint8_t flags);
 #define GDTSEL_UD 0x18    /* user data, ring 3 -> 0x1B with RPL 3 */
 #define GDTSEL_UC 0x20    /* user code, ring 3 -> 0x23 with RPL 3 */
 #define GDTSEL_TSS 0x28   /* 64-bit TSS */
+#define DOUBLE_FAULT_STACK_SIZE (32u * 1024u)
 void gdt_init(void);
 void set_tss_rsp0(uint64_t rsp);
+void double_fault_ist_init(void);
+uint64_t double_fault_stack_base(void);
+uint64_t double_fault_stack_top(void);
+uint64_t tss_ist1_top(void);
+int frame_on_double_fault_stack(uint64_t frame_rsp);
 
 /* Interrupts */
 void interrupts_init(void);
@@ -194,7 +207,70 @@ int kbd_getchar(void);
 
 /* CPU exceptions (vectors 0..31) */
 void exception_gate_init(void);
-void exception_handler(void* frame);
+
+/*
+ * Uniform frame laid down by every isr.S exception stub: 15 GPRs, vector,
+ * error code (hardware or dummy 0), then the five CPU-pushed iretq words.
+ * Offsets are ABI with the assembly stubs and scheduler trap-frame builders.
+ */
+typedef struct {
+    uint64_t r15, r14, r13, r12, rbp, rbx, r11, r10, r9, r8;
+    uint64_t rdi, rsi, rdx, rcx, rax;
+    uint64_t vec;
+    uint64_t err;
+    uint64_t rip, cs, rflags, rsp, ss;
+} __attribute__((packed)) exception_frame_t;
+
+/* The saved CS RPL, not the scheduled process, decides exception origin. */
+int exception_frame_is_user(const exception_frame_t* frame);
+int exception_frame_is_fatal(const exception_frame_t* frame);
+/* Unix-style termination status: 128 + vector (0..31). */
+int exception_exit_code(uint64_t vec);
+/*
+ * Terminate the current ring-3 process for a user fault and switch to the
+ * stack returned by the scheduler. Returns 0 when the frame is not a user
+ * fault or no safe stack exists; the assembly stub must never resume on 0.
+ */
+uint64_t exception_user_fault_exit(const exception_frame_t* frame,
+                                   uint64_t frame_rsp);
+uint64_t exception_handler(void* frame);
+
+/*
+ * Centralized fatal path. It is bounded, allocation-free, lock-free and
+ * never returns; recursive entry goes straight to the emergency halt loop.
+ */
+#define PANIC_LINE_MAX 192u
+#define PANIC_PF_PKE   0x1u    /* CR4.PKE enables protection-key #PF bits */
+#define PANIC_PF_CET_SS 0x2u   /* CR4.CET enables shadow-stack #PF bits */
+#define PANIC_PF_SGX   0x4u    /* CPUID.7:EBX.SGX reports SGX availability */
+
+#if defined(ARC_PANIC_HOST_TEST)
+#define PANIC_NORETURN
+#else
+#define PANIC_NORETURN __attribute__((noreturn))
+#endif
+
+PANIC_NORETURN void panic_emergency_halt(void);
+PANIC_NORETURN void kernel_panic(const char* reason);
+PANIC_NORETURN void kernel_panic_exception(const exception_frame_t* frame);
+int panic_guard_enter(void);
+int panic_guard_active(void);
+size_t panic_format_kv(char* buf, size_t cap, const char* key, uint64_t value);
+void panic_decode_pf_error(uint64_t err, unsigned features,
+                           char* buf, size_t cap);
+void panic_format_stack_state(const exception_frame_t* frame,
+                              uint64_t handler_rsp, int ist,
+                              char* buf, size_t cap);
+/* Vector 8 means IST delivery; the frame address must still be in bounds. */
+int panic_df_frame_on_ist_stack(const exception_frame_t* frame);
+int panic_vector_needs_cr2(uint64_t vec);
+const char* panic_exception_name(uint64_t vec);
+#if defined(ARC_PANIC_HOST_TEST)
+void panic_guard_reset_for_test(void);
+#endif
+#if defined(ARC_PANIC_DIAG_TEST)
+void panic_test_arm_recursive(void);
+#endif
 
 /* PIT timer */
 void pit_init(void);
@@ -853,6 +929,17 @@ extern const uint8_t _binary_user_hello_bin_size[];
 #define SYS_MOUNT   21
 #define SYS_SYNC    22
 #define SYS_FSYNC   23
+#ifdef ARC_RING0_FAULT_TEST
+#define SYS_RING0_FAULT_TEST 24 /* deliberate kernel-mode fault; test builds only */
+#endif
+#ifdef ARC_DOUBLE_FAULT_TEST
+#define SYS_DOUBLE_FAULT_TEST 25 /* deliberate #DF via unusable ring-0 stack */
+#endif
+#ifdef ARC_PANIC_DIAG_TEST
+#define SYS_PANIC_UD_TEST 26         /* deliberate kernel #UD, full diagnostics */
+#define SYS_PANIC_PF_TEST 27         /* deliberate kernel #PF, CR2 diagnostics */
+#define SYS_PANIC_RECURSIVE_TEST 28  /* second fatal entry during panic */
+#endif
 
 /* Kernel entry */
 void kernel_main(uint64_t boot_info, uint64_t boot_magic);

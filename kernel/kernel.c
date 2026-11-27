@@ -55,7 +55,7 @@ void kernel_main(uint64_t boot_info_addr, uint64_t boot_magic) {
     terminal_print_int(pmm_free_mem() >> 20);
     terminal_putstring(" MiB available\n");
 
-    /* Initialize all subsystems */
+    /* Load the TSS (including the #DF IST stack) before installing IDT gates. */
     gdt_init();
     idt_init();
     interrupts_init();

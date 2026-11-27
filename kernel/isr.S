@@ -138,8 +138,11 @@ yield_stub:
  * code (error-code vectors) or push a dummy 0 (the rest), then push the
  * vector number under it. Stack after PUSHREGS (rsp -> r15 ... rax,
  * +120 vector, +128 error, +136 RIP, +144 CS, +152 RFLAGS, +160 RSP,
- * +168 SS when a privilege change occurred). Never returns: the handler
- * halts after dumping context.
+ * +168 SS when a privilege change occurred). The handler never returns for
+ * kernel faults. For a ring-3 fault it returns the scheduler's replacement
+ * stack pointer, which we load before POPREGS/iretq so the faulting RIP is
+ * never resumed. A zero replacement stack halts here; it can never fall
+ * through to the original faulting frame.
  */
 .macro EXC_STUB num, has_err
     .globl exc_stub_\num
@@ -154,12 +157,17 @@ exc_stub_\num:
     PUSHREGS
     movq %rsp, %rdi
     call exception_handler
-1:  cli
-    hlt
-    jmp 1b
+    testq %rax, %rax
+    jz 2f
+    movq %rax, %rsp
+    POPREGS
+    iretq
+2:  cli
+3:  hlt
+    jmp 3b
 .endm
 
-/* error-code vectors: 8, 10, 11, 12, 13, 14, 17, 30 */
+/* error-code vectors: 8, 10, 11, 12, 13, 14, 17, 21, 29, 30 */
 EXC_STUB 0,0
 EXC_STUB 1,0
 EXC_STUB 2,0
@@ -181,7 +189,7 @@ EXC_STUB 17,1
 EXC_STUB 18,0
 EXC_STUB 19,0
 EXC_STUB 20,0
-EXC_STUB 21,0
+EXC_STUB 21,1
 EXC_STUB 22,0
 EXC_STUB 23,0
 EXC_STUB 24,0
@@ -189,7 +197,7 @@ EXC_STUB 25,0
 EXC_STUB 26,0
 EXC_STUB 27,0
 EXC_STUB 28,0
-EXC_STUB 29,0
+EXC_STUB 29,1
 EXC_STUB 30,1
 EXC_STUB 31,0
 

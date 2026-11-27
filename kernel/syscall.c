@@ -159,6 +159,49 @@ long syscall_dispatch(uint64_t n, uint64_t a1, uint64_t a2, uint64_t a3) {
         return vfs_sync_all();
     case SYS_FSYNC:
         return fd_fsync(pid, (int)a1);
+#ifdef ARC_RING0_FAULT_TEST
+    case SYS_RING0_FAULT_TEST:
+        /* Test-only: current_process is still a user process, but this fault
+         * executes in kernel mode and must take the fatal exception path. */
+        terminal_putstring("RING0FAULT kernel UD2 vector=6 pid=");
+        terminal_print_int((uint64_t)pid);
+        terminal_putstring("\n");
+        __asm__ volatile("ud2");
+        return -1;
+#endif
+#ifdef ARC_DOUBLE_FAULT_TEST
+    case SYS_DOUBLE_FAULT_TEST:
+        /* Test-only: #UD delivery with an unusable ring-0 stack must become
+         * #DF and enter through TSS IST1, never user-process termination. */
+        terminal_putstring("DOUBLEFAULT unusable ring0 stack -> #DF vector=8\n");
+        __asm__ volatile("movq $0, %%rsp\n\t"
+                         "ud2"
+                         : : : "memory");
+        return -1;
+#endif
+#ifdef ARC_PANIC_DIAG_TEST
+    case SYS_PANIC_UD_TEST:
+        /* Test-only: real ring-0 #UD, with full fatal context expected. */
+        terminal_putstring("PANICUD kernel UD2 vector=6\n");
+        __asm__ volatile("ud2");
+        return -1;
+    case SYS_PANIC_PF_TEST:
+        /* Test-only: real supervisor write to an unmapped address. */
+        terminal_putstring("PANICPF kernel write vector=14 "
+                           "address=0x00000000dead0000\n");
+        {
+            volatile uint32_t* unmapped =
+                (volatile uint32_t*)0x00000000dead0000ULL;
+            *unmapped = 0x13572468u;
+        }
+        return -1;
+    case SYS_PANIC_RECURSIVE_TEST:
+        /* Test-only: arm the panic handler, then enter it via a real #UD. */
+        terminal_putstring("PANICREC arming recursive fatal entry\n");
+        panic_test_arm_recursive();
+        __asm__ volatile("ud2");
+        return -1;
+#endif
     default:        return -1;
     }
 }

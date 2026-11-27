@@ -213,6 +213,14 @@ def build_user_shell(zig, objcopy):
     extra = []
     if os.environ.get("ARC_SYSCALL_TEST") == "1":
         extra.append("-DARC_SYSCALL_TEST")
+    if os.environ.get("ARC_EXCEPTION_TEST") == "1":
+        extra.append("-DARC_EXCEPTION_TEST")
+    if os.environ.get("ARC_RING0_FAULT_TEST") == "1":
+        extra.append("-DARC_RING0_FAULT_TEST")
+    if os.environ.get("ARC_DOUBLE_FAULT_TEST") == "1":
+        extra.append("-DARC_DOUBLE_FAULT_TEST")
+    if os.environ.get("ARC_PANIC_DIAG_TEST") == "1":
+        extra.append("-DARC_PANIC_DIAG_TEST")
     return build_user_blob(zig, objcopy, "user_shell", [CRT0, SHELL_C], extra)
 
 
@@ -430,6 +438,12 @@ def main(argv):
     ]
     if os.environ.get("AHCI_SELFTEST") == "1":
         CC64.append("-DAHCI_SELFTEST")
+    if os.environ.get("ARC_RING0_FAULT_TEST") == "1":
+        CC64.append("-DARC_RING0_FAULT_TEST")
+    if os.environ.get("ARC_DOUBLE_FAULT_TEST") == "1":
+        CC64.append("-DARC_DOUBLE_FAULT_TEST")
+    if os.environ.get("ARC_PANIC_DIAG_TEST") == "1":
+        CC64.append("-DARC_PANIC_DIAG_TEST")
 
     log("\n[1/5] compiling kernel and libc objects")
     objs = compile_kernel(zig)

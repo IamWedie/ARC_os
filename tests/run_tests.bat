@@ -194,4 +194,36 @@ echo [21/21] Building and running 2 MiB PDE address-mask test...
 if errorlevel 1 exit /b 1
 
 tests\test_vmm_pde_mask.exe
+
+echo [22/25] Checking exception stub and diagnostic source contract...
+python tests\test_exception_source_contract.py
+if errorlevel 1 exit /b 1
+
+echo [23/25] Building and running user-exception isolation test...
+"%GCC%" -O2 -Wall -Wextra -std=gnu11 -I kernel ^
+    tests\test_user_exception.c tests\exception_stub.c tests\pmm_stub.c ^
+    kernel\exception_policy.c kernel\scheduler.c ^
+    -o tests\test_user_exception.exe
+if errorlevel 1 exit /b 1
+
+tests\test_user_exception.exe
+if errorlevel 1 exit /b 1
+
+echo [24/25] Building and running dedicated double-fault IST test...
+"%GCC%" -O2 -Wall -Wextra -std=gnu11 -I kernel ^
+    tests\test_double_fault_ist.c kernel\gdt.c kernel\idt.c ^
+    -o tests\test_double_fault_ist.exe
+if errorlevel 1 exit /b 1
+
+tests\test_double_fault_ist.exe
+if errorlevel 1 exit /b 1
+
+echo [25/25] Building and running panic/fault diagnostics host test...
+"%GCC%" -O2 -Wall -Wextra -std=gnu11 -I kernel -DARC_PANIC_HOST_TEST ^
+    tests\test_panic_diagnostics.c kernel\panic.c kernel\exception_policy.c ^
+    -o tests\test_panic_diagnostics.exe
+if errorlevel 1 exit /b 1
+
+tests\test_panic_diagnostics.exe
+if errorlevel 1 exit /b 1
 exit /b %errorlevel%
